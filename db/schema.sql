@@ -32,15 +32,19 @@ create table bills (
 create index idx_bills_session on bills(session_id);
 
 create table items (
-  id            uuid primary key default gen_random_uuid(),
-  bill_id       uuid not null references bills(id) on delete cascade,
-  name          text not null,
-  quantity      integer not null default 1,
-  total_cents   integer not null,
-  -- resolved allocation - this is what feeds directly into the calculation
-  -- engine's `allocatedTo`. Empty array = still unassigned.
-  allocated_to  uuid[] not null default '{}',
-  created_at    timestamptz not null default now()
+  id                 uuid primary key default gen_random_uuid(),
+  bill_id            uuid not null references bills(id) on delete cascade,
+  name               text not null,
+  quantity           integer not null default 1,        -- total units of this line (e.g. 3 plates) - display only
+  unit_price_cents   integer,                            -- optional, display only (e.g. "$1.80 each")
+  total_cents        integer not null,                   -- authoritative amount used by the calculation engine
+  -- Resolved allocation - this is what feeds directly into the calculation
+  -- engine. Shape: [{ "participantId": "...", "quantity": 1 }, ...].
+  -- Empty array = still unassigned. `quantity` lets a shared item split
+  -- unevenly (e.g. a shared plate where Rachel had 1 piece, Hannah had 2)
+  -- instead of only ever being a straight equal split.
+  allocations        jsonb not null default '[]',
+  created_at         timestamptz not null default now()
 );
 create index idx_items_bill on items(bill_id);
 

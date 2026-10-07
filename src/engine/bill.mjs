@@ -1,10 +1,22 @@
 import { allocateProportional } from './allocation.mjs';
 
 /**
+ * @typedef {Object} ItemAllocation
+ * @property {string} participantId
+ * @property {number} quantity - how many units of this item this person had.
+ *   Defaults to 1 if omitted, which gives a plain equal split when every
+ *   allocation on an item uses quantity 1. Unequal quantities (e.g. a
+ *   shared plate of sushi where Rachel had 1 piece and Hannah had 2) are
+ *   supported by giving different quantities - the item's totalCents is
+ *   then split proportionally to quantity, using the same rounding-residual
+ *   rule as everything else in this engine.
+ */
+
+/**
  * @typedef {Object} BillItem
  * @property {string} id
  * @property {number} totalCents - this item's total price (qty * unit price), in cents
- * @property {string[]} allocatedTo - participant ids who share this item (creation order)
+ * @property {ItemAllocation[]} allocations - who had this item and how much of it
  */
 
 /**
@@ -27,10 +39,10 @@ function computeItemSubtotals(items, participantIds) {
   const subtotals = new Map(participantIds.map((id) => [id, 0]));
 
   for (const item of items) {
-    if (!item.allocatedTo || item.allocatedTo.length === 0) {
+    if (!item.allocations || item.allocations.length === 0) {
       throw new Error(`Item "${item.id}" has no allocation - bill cannot be finalised`);
     }
-    const weights = item.allocatedTo.map((id) => ({ id, weight: 1 }));
+    const weights = item.allocations.map((a) => ({ id: a.participantId, weight: a.quantity ?? 1 }));
     const shares = allocateProportional(item.totalCents, weights);
     for (const s of shares) {
       subtotals.set(s.id, (subtotals.get(s.id) ?? 0) + s.amountCents);

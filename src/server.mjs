@@ -41,6 +41,38 @@ export function createApp() {
     }
   });
 
+  app.patch('/sessions/:sessionId/participants/:participantId', async (req, res, next) => {
+    try {
+      const { name } = req.body ?? {};
+      if (!name) return res.status(400).json({ error: 'name is required' });
+      const participant = await store.renameParticipant(req.params.sessionId, req.params.participantId, name);
+      res.json(participant);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.delete('/sessions/:sessionId/participants/:participantId', async (req, res, next) => {
+    try {
+      await store.deleteParticipant(req.params.sessionId, req.params.participantId);
+      res.status(204).end();
+    } catch (err) {
+      if (err.code === 'PARTICIPANT_IS_PAYER') {
+        return res.status(409).json({ error: err.message, code: err.code });
+      }
+      next(err);
+    }
+  });
+
+  app.delete('/sessions/:sessionId/bills/:billId', async (req, res, next) => {
+    try {
+      await store.deleteBill(req.params.sessionId, req.params.billId);
+      res.status(204).end();
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.post('/sessions/:sessionId/bills', async (req, res, next) => {
     try {
       const { source, payerId, serviceChargeCents, gstCents, totalCents, items } = req.body ?? {};
@@ -63,11 +95,16 @@ export function createApp() {
 
   app.patch('/sessions/:sessionId/items/:itemId/allocation', async (req, res, next) => {
     try {
-      const { participantIds } = req.body ?? {};
-      if (!Array.isArray(participantIds) || participantIds.length === 0) {
-        return res.status(400).json({ error: 'participantIds must be a non-empty array' });
+      const { allocations } = req.body ?? {};
+      if (!Array.isArray(allocations) || allocations.length === 0) {
+        return res.status(400).json({ error: 'allocations must be a non-empty array of { participantId, quantity? }' });
       }
-      const item = await store.setItemAllocation(req.params.sessionId, req.params.itemId, participantIds);
+      for (const a of allocations) {
+        if (!a.participantId) {
+          return res.status(400).json({ error: 'each allocation needs a participantId' });
+        }
+      }
+      const item = await store.setItemAllocation(req.params.sessionId, req.params.itemId, allocations);
       res.json(item);
     } catch (err) {
       next(err);

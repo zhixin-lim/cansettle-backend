@@ -12,7 +12,7 @@ export function computeSessionSettlement(session) {
   const unassignedItems = [];
   for (const bill of session.bills) {
     for (const item of bill.items) {
-      if (!item.allocatedTo || item.allocatedTo.length === 0) {
+      if (!item.allocations || item.allocations.length === 0) {
         unassignedItems.push({ billId: bill.id, itemId: item.id, name: item.name });
       }
     }
@@ -28,7 +28,7 @@ export function computeSessionSettlement(session) {
     items: bill.items.map((item) => ({
       id: item.id,
       totalCents: item.totalCents,
-      allocatedTo: item.allocatedTo,
+      allocations: item.allocations,
     })),
     serviceChargeCents: bill.serviceChargeCents,
     gstCents: bill.gstCents,

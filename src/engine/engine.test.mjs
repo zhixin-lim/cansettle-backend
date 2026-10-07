@@ -11,8 +11,8 @@ test('Example 1: two people, simple proportional SC/GST allocation', () => {
     payerId: 'alice',
     participantIds: ['alice', 'bob'],
     items: [
-      { id: 'alice-items', totalCents: $(60), allocatedTo: ['alice'] },
-      { id: 'bob-items', totalCents: $(40), allocatedTo: ['bob'] },
+      { id: 'alice-items', totalCents: $(60), allocations: [{ participantId: 'alice' }] },
+      { id: 'bob-items', totalCents: $(40), allocations: [{ participantId: 'bob' }] },
     ],
     serviceChargeCents: $(10),
     gstCents: $(9.9),
@@ -44,9 +44,9 @@ test('Example 2: rounding residual goes to the largest pre-tax share', () => {
     participantIds: ['alice', 'bob', 'cherie'],
     items: [
       // Deliberately not evenly divisible by 3, to force the rounding path.
-      { id: 'a', totalCents: $(33.34), allocatedTo: ['alice'] },
-      { id: 'b', totalCents: $(33.33), allocatedTo: ['bob'] },
-      { id: 'c', totalCents: $(33.33), allocatedTo: ['cherie'] },
+      { id: 'a', totalCents: $(33.34), allocations: [{ participantId: 'alice' }] },
+      { id: 'b', totalCents: $(33.33), allocations: [{ participantId: 'bob' }] },
+      { id: 'c', totalCents: $(33.33), allocations: [{ participantId: 'cherie' }] },
     ],
     serviceChargeCents: $(10),
     gstCents: $(9.9),
@@ -73,9 +73,9 @@ test('Example 3: global session netting across two bills produces 2 transfers, n
     payerId: 'sarah',
     participantIds: ['sarah', 'rachel', 'hannah'],
     items: [
-      { id: 'd1', totalCents: $(50), allocatedTo: ['sarah'] },
-      { id: 'd2', totalCents: $(40), allocatedTo: ['rachel'] },
-      { id: 'd3', totalCents: $(30), allocatedTo: ['hannah'] },
+      { id: 'd1', totalCents: $(50), allocations: [{ participantId: 'sarah' }] },
+      { id: 'd2', totalCents: $(40), allocations: [{ participantId: 'rachel' }] },
+      { id: 'd3', totalCents: $(30), allocations: [{ participantId: 'hannah' }] },
     ],
     serviceChargeCents: 0,
     gstCents: 0,
@@ -87,9 +87,9 @@ test('Example 3: global session netting across two bills produces 2 transfers, n
     payerId: 'hannah',
     participantIds: ['sarah', 'rachel', 'hannah'],
     items: [
-      { id: 'e1', totalCents: $(10), allocatedTo: ['sarah'] },
-      { id: 'e2', totalCents: $(5), allocatedTo: ['rachel'] },
-      { id: 'e3', totalCents: $(15), allocatedTo: ['hannah'] },
+      { id: 'e1', totalCents: $(10), allocations: [{ participantId: 'sarah' }] },
+      { id: 'e2', totalCents: $(5), allocations: [{ participantId: 'rachel' }] },
+      { id: 'e3', totalCents: $(15), allocations: [{ participantId: 'hannah' }] },
     ],
     serviceChargeCents: 0,
     gstCents: 0,
@@ -111,6 +111,37 @@ test('Example 3: global session netting across two bills produces 2 transfers, n
   ]);
 });
 
+// --- Unequal quantities on a shared item (e.g. running sushi plates) ---
+test('Unequal quantities: a shared item splits proportionally to quantity, not headcount', () => {
+  const bill = {
+    id: 'sushi',
+    payerId: 'rachel',
+    participantIds: ['rachel', 'hannah'],
+    items: [
+      // 3 plates of the same dish, $9.00 total ($3/plate). Rachel had 1,
+      // Hannah had 2 - NOT a 50/50 split.
+      {
+        id: 'plates',
+        totalCents: $(9),
+        allocations: [
+          { participantId: 'rachel', quantity: 1 },
+          { participantId: 'hannah', quantity: 2 },
+        ],
+      },
+    ],
+    serviceChargeCents: 0,
+    gstCents: 0,
+    totalCents: $(9),
+  };
+
+  const result = calculateBill(bill);
+  assert.equal(result.reconciled, true);
+
+  const byId = Object.fromEntries(result.shares.map((s) => [s.participantId, s]));
+  assert.equal(byId.rachel.totalCents, $(3)); // 1/3 of $9
+  assert.equal(byId.hannah.totalCents, $(6)); // 2/3 of $9
+});
+
 // --- Trust invariant: a bill that doesn't reconcile must be refused ---
 test('Invariant: an unreconciled bill blocks the whole settlement', () => {
   const badBill = {
@@ -118,8 +149,8 @@ test('Invariant: an unreconciled bill blocks the whole settlement', () => {
     payerId: 'alice',
     participantIds: ['alice', 'bob'],
     items: [
-      { id: 'x', totalCents: $(50), allocatedTo: ['alice'] },
-      { id: 'y', totalCents: $(50), allocatedTo: ['bob'] },
+      { id: 'x', totalCents: $(50), allocations: [{ participantId: 'alice' }] },
+      { id: 'y', totalCents: $(50), allocations: [{ participantId: 'bob' }] },
     ],
     serviceChargeCents: 0,
     gstCents: 0,
@@ -141,7 +172,7 @@ test('Edge case: an unallocated item throws rather than silently guessing', () =
     id: 'unassigned',
     payerId: 'alice',
     participantIds: ['alice', 'bob'],
-    items: [{ id: 'mystery-item', totalCents: $(20), allocatedTo: [] }],
+    items: [{ id: 'mystery-item', totalCents: $(20), allocations: [] }],
     serviceChargeCents: 0,
     gstCents: 0,
     totalCents: $(20),

@@ -1,6 +1,4 @@
-// Same method names/shapes as inMemoryStore.mjs. Not runnable inside this
-// sandbox (no network path to supabase.co here), but this is the real
-// implementation to run once SUPABASE_URL / SUPABASE_ANON_KEY are set.
+// Same method names/shapes as inMemoryStore.mjs.
 
 import { createClient } from '@supabase/supabase-js';
 
@@ -18,11 +16,7 @@ function throwIfError(error, context) {
 }
 
 export async function createSession({ label } = {}) {
-  const { data, error } = await supabase
-    .from('sessions')
-    .insert({ label: label ?? null })
-    .select()
-    .single();
+  const { data, error } = await supabase.from('sessions').insert({ label: label ?? null }).select().single();
   throwIfError(error, 'createSession');
   return { id: data.id, label: data.label, createdAt: data.created_at, expiresAt: data.expires_at };
 }
@@ -75,8 +69,9 @@ export async function getSession(sessionId) {
         billId: i.bill_id,
         name: i.name,
         quantity: i.quantity,
+        unitPriceCents: i.unit_price_cents,
         totalCents: i.total_cents,
-        allocatedTo: i.allocated_to ?? [],
+        allocations: i.allocations ?? [],
       })),
     })),
   };
@@ -89,7 +84,67 @@ export async function addParticipant(sessionId, { name, telegramUserId = null })
     .select()
     .single();
   throwIfError(error, 'addParticipant');
-  return { id: data.id, sessionId: data.session_id, name: data.name, telegramUserId: data.telegram_user_id, createdAt: data.created_at };
+  return {
+    id: data.id,
+    sessionId: data.session_id,
+    name: data.name,
+    telegramUserId: data.telegram_user_id,
+    createdAt: data.created_at,
+  };
+}
+
+export async function renameParticipant(_sessionId, participantId, name) {
+  const { data, error } = await supabase
+    .from('participants')
+    .update({ name })
+    .eq('id', participantId)
+    .select()
+    .single();
+  throwIfError(error, 'renameParticipant');
+  return {
+    id: data.id,
+    sessionId: data.session_id,
+    name: data.name,
+    telegramUserId: data.telegram_user_id,
+    createdAt: data.created_at,
+  };
+}
+
+export async function deleteParticipant(sessionId, participantId) {
+  const { data: payerBills, error: checkError } = await supabase
+    .from('bills')
+    .select('id')
+    .eq('session_id', sessionId)
+    .eq('payer_id', participantId);
+  throwIfError(checkError, 'deleteParticipant/check');
+  if (payerBills.length > 0) {
+    const err = new Error('Cannot remove a participant who is the payer on a bill');
+    err.code = 'PARTICIPANT_IS_PAYER';
+    throw err;
+  }
+
+  // Strip this participant out of every item's allocations jsonb array.
+  // Supabase doesn't cascade into jsonb content, so this is done in code:
+  // fetch every item in the session, filter, write back the ones that changed.
+  const { data: bills, error: billsError } = await supabase
+    .from('bills')
+    .select('items(id, allocations)')
+    .eq('session_id', sessionId);
+  throwIfError(billsError, 'deleteParticipant/items');
+
+  for (const bill of bills) {
+    for (const item of bill.items ?? []) {
+      const allocations = item.allocations ?? [];
+      if (allocations.some((a) => a.participantId === participantId)) {
+        const next = allocations.filter((a) => a.participantId !== participantId);
+        const { error: updateError } = await supabase.from('items').update({ allocations: next }).eq('id', item.id);
+        throwIfError(updateError, 'deleteParticipant/strip-allocation');
+      }
+    }
+  }
+
+  const { error } = await supabase.from('participants').delete().eq('id', participantId);
+  throwIfError(error, 'deleteParticipant');
 }
 
 export async function addBill(sessionId, { source, payerId, serviceChargeCents = 0, gstCents = 0, totalCents, items }) {
@@ -111,6 +166,7 @@ export async function addBill(sessionId, { source, payerId, serviceChargeCents =
     bill_id: bill.id,
     name: item.name,
     quantity: item.quantity ?? 1,
+    unit_price_cents: item.unitPriceCents ?? null,
     total_cents: item.totalCents,
   }));
   const { data: insertedItems, error: itemsError } = await supabase.from('items').insert(itemRows).select();
@@ -130,16 +186,23 @@ export async function addBill(sessionId, { source, payerId, serviceChargeCents =
       billId: i.bill_id,
       name: i.name,
       quantity: i.quantity,
+      unitPriceCents: i.unit_price_cents,
       totalCents: i.total_cents,
-      allocatedTo: i.allocated_to ?? [],
+      allocations: i.allocations ?? [],
     })),
   };
 }
 
-export async function setItemAllocation(_sessionId, itemId, participantIds) {
+export async function deleteBill(_sessionId, billId) {
+  const { error } = await supabase.from('bills').delete().eq('id', billId);
+  throwIfError(error, 'deleteBill');
+}
+
+export async function setItemAllocation(_sessionId, itemId, allocations) {
+  const normalised = allocations.map((a) => ({ participantId: a.participantId, quantity: a.quantity ?? 1 }));
   const { data, error } = await supabase
     .from('items')
-    .update({ allocated_to: participantIds })
+    .update({ allocations: normalised })
     .eq('id', itemId)
     .select()
     .single();
@@ -149,7 +212,8 @@ export async function setItemAllocation(_sessionId, itemId, participantIds) {
     billId: data.bill_id,
     name: data.name,
     quantity: data.quantity,
+    unitPriceCents: data.unit_price_cents,
     totalCents: data.total_cents,
-    allocatedTo: data.allocated_to ?? [],
+    allocations: data.allocations ?? [],
   };
 }

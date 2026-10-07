@@ -39,6 +39,34 @@ export function addParticipant(sessionId, { name, telegramUserId = null }) {
   return participant;
 }
 
+export function renameParticipant(sessionId, participantId, name) {
+  const session = requireSession(sessionId);
+  const participant = session.participants.find((p) => p.id === participantId);
+  if (!participant) throw new Error(`Participant not found: ${participantId}`);
+  participant.name = name;
+  return participant;
+}
+
+// Removes a participant, and strips them from every item allocation across
+// the session so nothing is left pointing at a person who no longer
+// exists. Refuses if they're the payer on any bill - reassign the payer
+// first (or delete that bill) rather than leaving a bill with no payer.
+export function deleteParticipant(sessionId, participantId) {
+  const session = requireSession(sessionId);
+  const isPayerSomewhere = session.bills.some((b) => b.payerId === participantId);
+  if (isPayerSomewhere) {
+    const err = new Error('Cannot remove a participant who is the payer on a bill');
+    err.code = 'PARTICIPANT_IS_PAYER';
+    throw err;
+  }
+  session.participants = session.participants.filter((p) => p.id !== participantId);
+  for (const bill of session.bills) {
+    for (const item of bill.items) {
+      item.allocations = item.allocations.filter((a) => a.participantId !== participantId);
+    }
+  }
+}
+
 export function addBill(sessionId, { source, payerId, serviceChargeCents = 0, gstCents = 0, totalCents, items }) {
   const session = requireSession(sessionId);
   const billId = randomUUID();
@@ -56,12 +84,18 @@ export function addBill(sessionId, { source, payerId, serviceChargeCents = 0, gs
       billId,
       name: item.name,
       quantity: item.quantity ?? 1,
+      unitPriceCents: item.unitPriceCents ?? null,
       totalCents: item.totalCents,
-      allocatedTo: [],
+      allocations: [],
     })),
   };
   session.bills.push(bill);
   return bill;
+}
+
+export function deleteBill(sessionId, billId) {
+  const session = requireSession(sessionId);
+  session.bills = session.bills.filter((b) => b.id !== billId);
 }
 
 function findItem(session, itemId) {
@@ -72,11 +106,13 @@ function findItem(session, itemId) {
   return null;
 }
 
-export function setItemAllocation(sessionId, itemId, participantIds) {
+// allocations: [{ participantId, quantity? }] - quantity defaults to 1,
+// so a plain list of participantIds-with-no-quantity is an equal split.
+export function setItemAllocation(sessionId, itemId, allocations) {
   const session = requireSession(sessionId);
   const found = findItem(session, itemId);
   if (!found) throw new Error(`Item not found: ${itemId}`);
-  found.item.allocatedTo = participantIds;
+  found.item.allocations = allocations.map((a) => ({ participantId: a.participantId, quantity: a.quantity ?? 1 }));
   return found.item;
 }
 
