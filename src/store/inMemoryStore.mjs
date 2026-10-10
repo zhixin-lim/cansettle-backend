@@ -26,6 +26,27 @@ export function getSession(sessionId) {
   return session; // includes nested participants/bills for convenience
 }
 
+// Lightweight lookup used by the expiry guard in server.mjs - avoids loading
+// every participant/bill just to check whether a session is still alive.
+export function getSessionMeta(sessionId) {
+  const session = sessions.get(sessionId);
+  if (!session) return null;
+  return { id: session.id, expiresAt: session.expiresAt };
+}
+
+// Deletes every session whose expiry time has passed. Returns how many were removed.
+export function deleteExpiredSessions() {
+  const now = Date.now();
+  let deleted = 0;
+  for (const [id, session] of sessions) {
+    if (new Date(session.expiresAt).getTime() <= now) {
+      sessions.delete(id);
+      deleted++;
+    }
+  }
+  return deleted;
+}
+
 function requireSession(sessionId) {
   const session = sessions.get(sessionId);
   if (!session) throw new Error(`Session not found: ${sessionId}`);
@@ -67,12 +88,13 @@ export function deleteParticipant(sessionId, participantId) {
   }
 }
 
-export function addBill(sessionId, { source, payerId, serviceChargeCents = 0, gstCents = 0, totalCents, items }) {
+export function addBill(sessionId, { name = null, source, payerId, serviceChargeCents = 0, gstCents = 0, totalCents, items }) {
   const session = requireSession(sessionId);
   const billId = randomUUID();
   const bill = {
     id: billId,
     sessionId,
+    name,
     source,
     payerId,
     serviceChargeCents,
@@ -114,6 +136,12 @@ export function setItemAllocation(sessionId, itemId, allocations) {
   if (!found) throw new Error(`Item not found: ${itemId}`);
   found.item.allocations = allocations.map((a) => ({ participantId: a.participantId, quantity: a.quantity ?? 1 }));
   return found.item;
+}
+
+// Forces a session's expiry into the past - only for tests.
+export function _expireSession(sessionId) {
+  const session = sessions.get(sessionId);
+  if (session) session.expiresAt = new Date(Date.now() - 1000).toISOString();
 }
 
 // Wipes everything - only for tests.

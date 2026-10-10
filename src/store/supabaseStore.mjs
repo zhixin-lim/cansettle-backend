@@ -21,6 +21,33 @@ export async function createSession({ label } = {}) {
   return { id: data.id, label: data.label, createdAt: data.created_at, expiresAt: data.expires_at };
 }
 
+// Lightweight lookup used by the expiry guard in server.mjs (one small query
+// instead of the three getSession makes). A malformed id counts as "not found".
+export async function getSessionMeta(sessionId) {
+  const { data, error } = await supabase
+    .from('sessions')
+    .select('id, expires_at')
+    .eq('id', sessionId)
+    .maybeSingle();
+  if (error) {
+    if (error.code === '22P02') return null; // not a valid uuid
+    throw new Error(`getSessionMeta: ${error.message}`);
+  }
+  return data ? { id: data.id, expiresAt: data.expires_at } : null;
+}
+
+// Deletes every expired session. participants, bills, items and claims go
+// with it via the ON DELETE CASCADE foreign keys. Returns how many were removed.
+export async function deleteExpiredSessions() {
+  const { data, error } = await supabase
+    .from('sessions')
+    .delete()
+    .lt('expires_at', new Date().toISOString())
+    .select('id');
+  throwIfError(error, 'deleteExpiredSessions');
+  return data.length;
+}
+
 export async function getSession(sessionId) {
   const { data: session, error: sessionError } = await supabase
     .from('sessions')
@@ -58,6 +85,7 @@ export async function getSession(sessionId) {
     bills: bills.map((b) => ({
       id: b.id,
       sessionId: b.session_id,
+      name: b.name,
       source: b.source,
       payerId: b.payer_id,
       serviceChargeCents: b.service_charge_cents,
@@ -147,11 +175,12 @@ export async function deleteParticipant(sessionId, participantId) {
   throwIfError(error, 'deleteParticipant');
 }
 
-export async function addBill(sessionId, { source, payerId, serviceChargeCents = 0, gstCents = 0, totalCents, items }) {
+export async function addBill(sessionId, { name = null, source, payerId, serviceChargeCents = 0, gstCents = 0, totalCents, items }) {
   const { data: bill, error: billError } = await supabase
     .from('bills')
     .insert({
       session_id: sessionId,
+      name,
       source,
       payer_id: payerId,
       service_charge_cents: serviceChargeCents,
@@ -175,6 +204,7 @@ export async function addBill(sessionId, { source, payerId, serviceChargeCents =
   return {
     id: bill.id,
     sessionId: bill.session_id,
+    name: bill.name,
     source: bill.source,
     payerId: bill.payer_id,
     serviceChargeCents: bill.service_charge_cents,

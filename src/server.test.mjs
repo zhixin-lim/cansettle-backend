@@ -1,7 +1,7 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApp } from './server.mjs';
-import { _resetAll } from './store/inMemoryStore.mjs';
+import { _resetAll, _expireSession, deleteExpiredSessions } from './store/inMemoryStore.mjs';
 
 process.env.STORE = 'memory';
 
@@ -223,4 +223,50 @@ test('unequal quantities on a shared item, via the real API', async () => {
   const byId = Object.fromEntries(settled.balances.map((b) => [b.participantId, b]));
   assert.equal(byId[rachel.id].shareCents, 300);
   assert.equal(byId[hannah.id].shareCents, 600);
+});
+
+test('an expired session is refused with 410 on reads and writes', async () => {
+  const session = (await post('/sessions', {})).body;
+  _expireSession(session.id);
+
+  const read = await get(`/sessions/${session.id}`);
+  assert.equal(read.status, 410);
+  assert.equal(read.body.code, 'SESSION_EXPIRED');
+
+  const write = await post(`/sessions/${session.id}/participants`, { name: 'Late' });
+  assert.equal(write.status, 410);
+
+  const settle = await get(`/sessions/${session.id}/settlement`);
+  assert.equal(settle.status, 410);
+});
+
+test('the expiry sweep deletes expired sessions and keeps live ones', async () => {
+  const expired = (await post('/sessions', {})).body;
+  const live = (await post('/sessions', {})).body;
+  _expireSession(expired.id);
+
+  const removed = deleteExpiredSessions();
+  assert.equal(removed, 1);
+
+  assert.equal((await get(`/sessions/${expired.id}`)).status, 404);
+  assert.equal((await get(`/sessions/${live.id}`)).status, 200);
+});
+
+test('a bill name round-trips through the session', async () => {
+  const session = (await post('/sessions', {})).body;
+  const sarah = (await post(`/sessions/${session.id}/participants`, { name: 'Sarah' })).body;
+
+  const bill = (
+    await post(`/sessions/${session.id}/bills`, {
+      name: 'Otter & Pebbles',
+      source: 'manual',
+      payerId: sarah.id,
+      totalCents: 1000,
+      items: [{ name: 'Item', totalCents: 1000 }],
+    })
+  ).body;
+  assert.equal(bill.name, 'Otter & Pebbles');
+
+  const after = (await get(`/sessions/${session.id}`)).body;
+  assert.equal(after.bills[0].name, 'Otter & Pebbles');
 });

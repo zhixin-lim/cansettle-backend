@@ -16,3 +16,5 @@ export const deleteParticipant = impl.deleteParticipant;
 export const addBill = impl.addBill;
 export const deleteBill = impl.deleteBill;
 export const setItemAllocation = impl.setItemAllocation;
+export const getSessionMeta = impl.getSessionMeta;
+export const deleteExpiredSessions = impl.deleteExpiredSessions;

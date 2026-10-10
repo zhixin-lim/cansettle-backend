@@ -22,6 +22,7 @@ create index idx_participants_session on participants(session_id);
 create table bills (
   id                     uuid primary key default gen_random_uuid(),
   session_id             uuid not null references sessions(id) on delete cascade,
+  name                   text,                                   -- optional, e.g. the shop name "Otter & Pebbles"
   source                 text not null check (source in ('receipt', 'manual')),
   payer_id               uuid not null references participants(id),
   service_charge_cents   integer not null default 0,
