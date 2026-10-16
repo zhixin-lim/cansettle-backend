@@ -65,6 +65,13 @@ create table item_claims (
 );
 create index idx_item_claims_item on item_claims(item_id);
 
+-- Telegram bot: one row per chat, holding what the bot needs to remember
+create table bot_chats (
+  chat_id     bigint primary key,                 -- the Telegram chat
+  state       jsonb not null,                     -- which settlement it is on + the receipt awaiting confirmation
+  updated_at  timestamptz not null default now()  -- rows older than 24h are swept away
+);
+
 -- Prototype note: RLS is left OFF for now since there's no real user
 -- accounts, only session-scoped access via an unguessable session id in
 -- the URL. Before this goes anywhere near production, tighten access so a
