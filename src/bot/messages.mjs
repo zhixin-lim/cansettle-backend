@@ -35,6 +35,8 @@ export function welcome() {
     '',
     "Then you check what I read, open the app, and say who had what. I'll work out exactly who pays whom, GST and service charge included.",
     '',
+    "Heads up: Google's Gemini AI reads your photo. /help explains what that means.",
+    '',
     'Send the receipt photo whenever you are ready 📸',
   ].join('\n');
 }
@@ -48,7 +50,8 @@ export function help() {
     '4. Open the app and say who had what.',
     '',
     '<b>About your receipt</b>',
-    'An AI service reads the photo to pull out the items. I do not keep the photo. If you can, crop out card details first.',
+    "Google's Gemini AI reads the photo to pull out the items. I do not keep the photo, but on Google's free plan Google may use what it receives to improve its products, and people there may read it.",
+    'So crop out card numbers and names first, or skip the photo and add the bill by hand in the app.',
     '',
     'Nothing is permanent: a settlement is cleared after 24 hours. No accounts.',
     '',
@@ -113,6 +116,14 @@ export function readyToOpen({ receiptCount, totalCents }) {
   ].join('\n');
 }
 
+export function askForPhoto() {
+  return 'No problem. Send the receipt photo again 📸';
+}
+
+export function nextReceipt() {
+  return 'Send the next receipt 📸';
+}
+
 export function cancelled() {
   return 'Okay, dropped. Send a new receipt photo whenever you want to start again.';
 }
@@ -136,7 +147,19 @@ export function busy() {
 }
 
 export function sendAPhoto() {
-  return 'Send me a photo of the receipt 📸 (a photo, not a file or text).';
+  return 'Send me a photo of the receipt 📸';
+}
+
+export function tooMany() {
+  return "Whoa, that's a lot of receipts in a short time. Give me a few minutes, then send the next one.";
+}
+
+export function staleButton() {
+  return "That button is from an older message. Send a receipt photo to start again 📸";
+}
+
+export function privateOnly() {
+  return 'Message me directly to settle a bill, I only work in private chats.';
 }
 
 export function sessionGone() {

@@ -54,8 +54,21 @@ test('counts are pluralised correctly', () => {
   assert.ok(m.readyToOpen({ receiptCount: 2, totalCents: 1000 }).includes('2 receipts, $10.00'));
 });
 
-test('help is honest about the AI reader and the 24-hour limit', () => {
+test('help is honest about who reads the photo, and the 24-hour limit', () => {
   const text = m.help();
-  assert.ok(text.includes('An AI service reads the photo'));
+  assert.ok(text.includes("Google's Gemini AI reads the photo"));
+  assert.ok(text.includes('improve its products'));
+  assert.ok(text.includes('add the bill by hand'));
   assert.ok(text.includes('24 hours'));
+});
+
+test('welcome points to the Gemini disclosure before the first photo', () => {
+  assert.ok(m.welcome().includes("Google's Gemini AI reads your photo"));
+});
+
+test('the flow templates exist and stay short', () => {
+  for (const fn of [m.askForPhoto, m.nextReceipt, m.tooMany, m.staleButton, m.privateOnly, m.sendAPhoto]) {
+    const text = fn();
+    assert.ok(text.length > 0 && text.length < 200);
+  }
 });

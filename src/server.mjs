@@ -3,8 +3,9 @@ import express from 'express';
 import cors from 'cors';
 import * as store from './store/index.mjs';
 import { computeSessionSettlement } from './settlementService.mjs';
+import { mountBot } from './bot/index.mjs';
 
-export function createApp() {
+export function createApp(options = {}) {
   const app = express();
   app.use(cors());
   app.use(express.json());
@@ -139,6 +140,9 @@ export function createApp() {
     }
   });
 
+  // Telegram bot (only active when TELEGRAM_BOT_TOKEN is set)
+  app.locals.bot = mountBot(app, { store, ...options.bot });
+
   // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => {
     console.error(err);
@@ -160,10 +164,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     try {
       const deleted = await store.deleteExpiredSessions();
       if (deleted > 0) console.log(`Expiry sweep removed ${deleted} session(s)`);
+      const staleChats = await store.deleteStaleChatStates();
+      if (staleChats > 0) console.log(`Expiry sweep removed ${staleChats} stale bot chat(s)`);
     } catch (err) {
       console.error('Expiry sweep failed:', err.message);
     }
   };
   sweep();
   setInterval(sweep, 60 * 60 * 1000);
+
+  if (app.locals.bot.enabled) {
+    app.locals.bot.registerWebhook().catch((err) => console.error('Webhook registration failed:', err.message));
+  }
 }

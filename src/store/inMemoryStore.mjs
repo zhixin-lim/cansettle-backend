@@ -138,6 +138,41 @@ export function setItemAllocation(sessionId, itemId, allocations) {
   return found.item;
 }
 
+// ---- Telegram bot chat state: which settlement a chat is on, and the receipt
+// waiting for the user to confirm. Kept for 24 hours after its last update.
+const chatStates = new Map(); // chatId -> { state, updatedAt }
+
+export function getChatState(chatId) {
+  return chatStates.get(chatId)?.state ?? null;
+}
+
+export function setChatState(chatId, state) {
+  chatStates.set(chatId, { state, updatedAt: Date.now() });
+}
+
+export function clearChatState(chatId) {
+  chatStates.delete(chatId);
+}
+
+// Removes chat states not touched in the last 24 hours. Returns how many.
+export function deleteStaleChatStates() {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  let deleted = 0;
+  for (const [id, entry] of chatStates) {
+    if (entry.updatedAt < cutoff) {
+      chatStates.delete(id);
+      deleted++;
+    }
+  }
+  return deleted;
+}
+
+// Makes a chat state look old - only for tests.
+export function _ageChatState(chatId, ms) {
+  const entry = chatStates.get(chatId);
+  if (entry) entry.updatedAt -= ms;
+}
+
 // Forces a session's expiry into the past - only for tests.
 export function _expireSession(sessionId) {
   const session = sessions.get(sessionId);
@@ -147,4 +182,5 @@ export function _expireSession(sessionId) {
 // Wipes everything - only for tests.
 export function _resetAll() {
   sessions.clear();
+  chatStates.clear();
 }

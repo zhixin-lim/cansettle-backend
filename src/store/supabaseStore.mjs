@@ -247,3 +247,30 @@ export async function setItemAllocation(_sessionId, itemId, allocations) {
     allocations: data.allocations ?? [],
   };
 }
+
+// ---- Telegram bot chat state (table: bot_chats). Kept for 24 hours after its last update.
+
+export async function getChatState(chatId) {
+  const { data, error } = await supabase.from('bot_chats').select('state').eq('chat_id', chatId).maybeSingle();
+  throwIfError(error, 'getChatState');
+  return data?.state ?? null;
+}
+
+export async function setChatState(chatId, state) {
+  const { error } = await supabase
+    .from('bot_chats')
+    .upsert({ chat_id: chatId, state, updated_at: new Date().toISOString() });
+  throwIfError(error, 'setChatState');
+}
+
+export async function clearChatState(chatId) {
+  const { error } = await supabase.from('bot_chats').delete().eq('chat_id', chatId);
+  throwIfError(error, 'clearChatState');
+}
+
+export async function deleteStaleChatStates() {
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { data, error } = await supabase.from('bot_chats').delete().lt('updated_at', cutoff).select('chat_id');
+  throwIfError(error, 'deleteStaleChatStates');
+  return data.length;
+}

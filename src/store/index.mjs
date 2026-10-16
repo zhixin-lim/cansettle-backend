@@ -18,3 +18,7 @@ export const deleteBill = impl.deleteBill;
 export const setItemAllocation = impl.setItemAllocation;
 export const getSessionMeta = impl.getSessionMeta;
 export const deleteExpiredSessions = impl.deleteExpiredSessions;
+export const getChatState = impl.getChatState;
+export const setChatState = impl.setChatState;
+export const clearChatState = impl.clearChatState;
+export const deleteStaleChatStates = impl.deleteStaleChatStates;
