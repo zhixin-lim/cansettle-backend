@@ -84,52 +84,96 @@ export function parseModelJson(text) {
 }
 
 /**
+ * Google retires Gemini models on a schedule (gemini-2.5-flash is scheduled to
+ * shut down on 16 October 2026), so the reader tries a list of models instead
+ * of trusting one name. Set GEMINI_MODEL (one name, or a comma-separated list)
+ * to override this without changing code.
+ */
+export const DEFAULT_MODELS = ['gemini-3.5-flash', 'gemini-flash-latest', 'gemini-3-flash-preview'];
+
+export function modelsFromEnv(env = process.env) {
+  const list = String(env.GEMINI_MODEL ?? '')
+    .split(',')
+    .map((m) => m.trim())
+    .filter(Boolean);
+  return list.length > 0 ? list : DEFAULT_MODELS;
+}
+
+// The model that worked last time is tried first, so a retired model costs
+// one wasted call per restart instead of one per receipt.
+let lastGoodModel = null;
+export function _resetModelMemory() {
+  lastGoodModel = null;
+}
+
+/** Statuses meaning "this model isn't usable for you right now, try the next one". */
+const tryNextModel = (status) => status === 403 || status === 404 || status === 429 || status >= 500;
+
+/**
  * Sends the photo to Gemini and returns a normalised receipt.
- * Error codes: BUSY (rate limit / outage / timeout), CONFIG (bad key or model:
- * a problem for the owner, not the user), UNREADABLE, NOT_A_RECEIPT.
+ * Error codes: BUSY (rate limit / outage / timeout), CONFIG (bad key, or no
+ * model worked and none was merely busy: a problem for the owner, not the
+ * user), UNREADABLE, NOT_A_RECEIPT. The message lists what each model said,
+ * so the server log shows exactly what to fix.
  */
 export async function readReceipt({
   bytes,
   mimeType,
   apiKey = process.env.GEMINI_API_KEY,
-  model = process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+  models = modelsFromEnv(),
   fetchImpl = fetch,
   timeoutMs = 45_000,
 }) {
   if (!apiKey) throw new ReceiptReadError('CONFIG', 'GEMINI_API_KEY is not set');
 
-  let res;
-  try {
-    res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: PROMPT },
-              { inline_data: { mime_type: mimeType, data: Buffer.from(bytes).toString('base64') } },
-            ],
-          },
+  const order = lastGoodModel && models.includes(lastGoodModel) ? [lastGoodModel, ...models.filter((m) => m !== lastGoodModel)] : models;
+  const body = JSON.stringify({
+    contents: [
+      {
+        parts: [
+          { text: PROMPT },
+          { inline_data: { mime_type: mimeType, data: Buffer.from(bytes).toString('base64') } },
         ],
-        generationConfig: { responseMimeType: 'application/json', temperature: 0 },
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch {
-    throw new ReceiptReadError('BUSY', 'The reader could not be reached or timed out');
+      },
+    ],
+    generationConfig: { responseMimeType: 'application/json', temperature: 0 },
+  });
+
+  const failures = [];
+  for (const model of order) {
+    let res;
+    try {
+      res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch {
+      // Unreachable or timed out: another model won't help, and waiting again would be slow.
+      throw new ReceiptReadError('BUSY', `Gemini could not be reached (${model})`);
+    }
+
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data?.promptFeedback?.blockReason) throw new ReceiptReadError('UNREADABLE', 'The image was blocked');
+      const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('');
+      if (!text) throw new ReceiptReadError('UNREADABLE', 'The reader returned nothing');
+      lastGoodModel = model;
+      return normalizeReceipt(parseModelJson(text));
+    }
+
+    const detail = String(await Promise.resolve().then(() => res.text()).catch(() => ''))
+      .replace(/\s+/g, ' ')
+      .slice(0, 160);
+    if (tryNextModel(res.status)) {
+      failures.push(`${model}: ${res.status} ${detail}`.trim());
+      continue;
+    }
+    // e.g. 400 "API key not valid": every model would fail the same way.
+    throw new ReceiptReadError('CONFIG', `Gemini returned ${res.status} for ${model}: ${detail}`);
   }
 
-  if (res.status === 429 || res.status >= 500) throw new ReceiptReadError('BUSY', `Gemini returned ${res.status}`);
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new ReceiptReadError('CONFIG', `Gemini returned ${res.status}: ${detail.slice(0, 200)}`);
-  }
-
-  const data = await res.json().catch(() => null);
-  if (data?.promptFeedback?.blockReason) throw new ReceiptReadError('UNREADABLE', 'The image was blocked');
-  const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('');
-  if (!text) throw new ReceiptReadError('UNREADABLE', 'The reader returned nothing');
-
-  return normalizeReceipt(parseModelJson(text));
+  const justBusy = failures.some((f) => / (429|5\d\d)( |$)/.test(f));
+  throw new ReceiptReadError(justBusy ? 'BUSY' : 'CONFIG', `No Gemini model worked. ${failures.join(' | ')}`);
 }

@@ -1,6 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeReceipt, parseModelJson, readReceipt, ReceiptReadError } from './receiptReader.mjs';
+import { beforeEach } from 'node:test';
+import {
+  DEFAULT_MODELS,
+  modelsFromEnv,
+  normalizeReceipt,
+  parseModelJson,
+  readReceipt,
+  ReceiptReadError,
+  _resetModelMemory,
+} from './receiptReader.mjs';
+
+beforeEach(() => _resetModelMemory());
 
 const good = {
   isReceipt: true,
@@ -85,7 +96,7 @@ const ok = (obj) => ({ ok: true, status: 200, json: async () => ({ candidates: [
 
 test('readReceipt sends the photo to Gemini in the documented format', async () => {
   const { fetchImpl, seen } = fakeGemini(ok(good));
-  const r = await readReceipt({ bytes: Buffer.from('PHOTO'), mimeType: 'image/png', apiKey: 'KEY123', model: 'gemini-test', fetchImpl });
+  const r = await readReceipt({ bytes: Buffer.from('PHOTO'), mimeType: 'image/png', apiKey: 'KEY123', models: ['gemini-test'], fetchImpl });
   assert.equal(r.totalCents, 1247);
 
   const { url, init } = seen[0];
@@ -102,17 +113,17 @@ test('readReceipt sends the photo to Gemini in the documented format', async () 
 test('rate limits and outages are BUSY; bad keys are CONFIG without leaking the key', async () => {
   for (const status of [429, 500, 503]) {
     const { fetchImpl } = fakeGemini({ ok: false, status });
-    await assert.rejects(readReceipt({ bytes: Buffer.from('x'), mimeType: 'image/jpeg', apiKey: 'K', fetchImpl }), { code: 'BUSY' });
+    await assert.rejects(readReceipt({ bytes: Buffer.from('x'), mimeType: 'image/jpeg', apiKey: 'K', models: ['m'], fetchImpl }), { code: 'BUSY' });
   }
   const { fetchImpl } = fakeGemini({ ok: false, status: 403, text: async () => 'API key not valid' });
   await assert.rejects(
-    readReceipt({ bytes: Buffer.from('x'), mimeType: 'image/jpeg', apiKey: 'SECRETKEY', fetchImpl }),
+    readReceipt({ bytes: Buffer.from('x'), mimeType: 'image/jpeg', apiKey: 'SECRETKEY', models: ['m'], fetchImpl }),
     (err) => err.code === 'CONFIG' && !err.message.includes('SECRETKEY'),
   );
 });
 
 test('network failures, blocked images and empty answers are handled', async () => {
-  const base = { bytes: Buffer.from('x'), mimeType: 'image/jpeg', apiKey: 'K' };
+  const base = { bytes: Buffer.from('x'), mimeType: 'image/jpeg', apiKey: 'K', models: ['m'] };
   await assert.rejects(readReceipt({ ...base, fetchImpl: fakeGemini(new Error('down')).fetchImpl }), { code: 'BUSY' });
   await assert.rejects(
     readReceipt({ ...base, fetchImpl: fakeGemini({ ok: true, status: 200, json: async () => ({ promptFeedback: { blockReason: 'SAFETY' } }) }).fetchImpl }),
@@ -123,4 +134,73 @@ test('network failures, blocked images and empty answers are handled', async () 
 
 test('no API key is reported as a CONFIG problem', async () => {
   await assert.rejects(readReceipt({ bytes: Buffer.from('x'), mimeType: 'image/jpeg', apiKey: '' }), (e) => e instanceof ReceiptReadError && e.code === 'CONFIG');
+});
+
+function sequence(...responses) {
+  const urls = [];
+  const fetchImpl = async (url) => {
+    urls.push(url.split('/models/')[1].split(':')[0]);
+    const next = responses.shift();
+    if (!next) throw new Error('no more fake responses');
+    return next;
+  };
+  return { fetchImpl, urls };
+}
+const gone = { ok: false, status: 404, text: async () => 'This model is no longer available' };
+const base = { bytes: Buffer.from('x'), mimeType: 'image/jpeg', apiKey: 'K' };
+
+test('a retired model (404) falls through to the next one', async () => {
+  const { fetchImpl, urls } = sequence(gone, ok(good));
+  const r = await readReceipt({ ...base, models: ['old-model', 'new-model'], fetchImpl });
+  assert.equal(r.totalCents, 1247);
+  assert.deepEqual(urls, ['old-model', 'new-model']);
+});
+
+test('the model that worked is tried first next time', async () => {
+  const first = sequence(gone, ok(good));
+  await readReceipt({ ...base, models: ['old-model', 'new-model'], fetchImpl: first.fetchImpl });
+  const second = sequence(ok(good));
+  await readReceipt({ ...base, models: ['old-model', 'new-model'], fetchImpl: second.fetchImpl });
+  assert.deepEqual(second.urls, ['new-model']);
+});
+
+test('a quota error on one model also moves on to the next', async () => {
+  const { fetchImpl, urls } = sequence({ ok: false, status: 429, text: async () => 'quota limit: 0' }, ok(good));
+  await readReceipt({ ...base, models: ['a', 'b'], fetchImpl });
+  assert.deepEqual(urls, ['a', 'b']);
+});
+
+test('a bad key (400) stops straight away: no other model would accept it', async () => {
+  const { fetchImpl, urls } = sequence({ ok: false, status: 400, text: async () => 'API key not valid' });
+  await assert.rejects(readReceipt({ ...base, models: ['a', 'b'], fetchImpl }), { code: 'CONFIG' });
+  assert.deepEqual(urls, ['a']);
+});
+
+test('when every model fails, the error says what each one said', async () => {
+  const { fetchImpl } = sequence(gone, { ok: false, status: 403, text: async () => 'not allowed on the free tier' });
+  await assert.rejects(readReceipt({ ...base, models: ['a', 'b'], fetchImpl }), (err) => {
+    assert.equal(err.code, 'CONFIG');
+    assert.ok(err.message.includes('a: 404'));
+    assert.ok(err.message.includes('b: 403 not allowed on the free tier'));
+    assert.ok(!err.message.includes('K,'), 'no key in the message');
+    return true;
+  });
+});
+
+test('if any model was only rate limited, the user is told it is busy rather than broken', async () => {
+  const { fetchImpl } = sequence(gone, { ok: false, status: 429, text: async () => '' });
+  await assert.rejects(readReceipt({ ...base, models: ['a', 'b'], fetchImpl }), { code: 'BUSY' });
+});
+
+test('an unreachable Gemini is BUSY straight away, without trying every model', async () => {
+  const { fetchImpl, urls } = sequence();
+  await assert.rejects(readReceipt({ ...base, models: ['a', 'b', 'c'], fetchImpl }), { code: 'BUSY' });
+  assert.deepEqual(urls, ['a']);
+});
+
+test('GEMINI_MODEL can be one name or a comma-separated list; otherwise the defaults apply', () => {
+  assert.deepEqual(modelsFromEnv({ GEMINI_MODEL: 'x' }), ['x']);
+  assert.deepEqual(modelsFromEnv({ GEMINI_MODEL: ' a , b ,, c ' }), ['a', 'b', 'c']);
+  assert.deepEqual(modelsFromEnv({}), DEFAULT_MODELS);
+  assert.ok(!DEFAULT_MODELS.includes('gemini-2.5-flash'), 'that model is being retired');
 });
