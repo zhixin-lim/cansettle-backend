@@ -83,8 +83,19 @@ export function receiptReview(receipt, { number = 1 } = {}) {
   if (items.length > MAX_ITEM_LINES) lines.push(`…and ${items.length - MAX_ITEM_LINES} more items`);
 
   lines.push('');
+  // Discounts are already taken off the item prices above, so say so: otherwise
+  // a price lower than the receipt's looks like a misread.
+  for (const d of receipt.discounts ?? []) {
+    lines.push(`${esc(d.name)} — -${formatCents(d.cents)} (already taken off the items above)`);
+  }
   if (sc > 0) lines.push(`Service charge — ${formatCents(sc)}`);
+  else if ((receipt.serviceChargeIncludedCents ?? 0) > 0) {
+    lines.push(`Service charge — ${formatCents(receipt.serviceChargeIncludedCents)} (already in the prices)`);
+  }
   if (gst > 0) lines.push(`GST — ${formatCents(gst)}`);
+  else if ((receipt.gstIncludedCents ?? 0) > 0) {
+    lines.push(`GST — ${formatCents(receipt.gstIncludedCents)} (already in the prices)`);
+  }
   lines.push(`<b>Total — ${formatCents(receipt.totalCents)}</b>`);
 
   const gap = receipt.totalCents - (itemsTotal + sc + gst);

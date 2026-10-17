@@ -42,11 +42,6 @@ test('normalizeReceipt does not lose cents to floating point', () => {
   assert.deepEqual(r.items.map((i) => i.totalCents), [30, 1235]);
 });
 
-test('discounts are kept as negative items', () => {
-  const r = normalizeReceipt({ items: [{ name: 'Burger', quantity: 1, lineTotal: 10 }, { name: 'Voucher', quantity: 1, lineTotal: -2 }], total: 8 });
-  assert.deepEqual(r.items.map((i) => i.totalCents), [1000, -200]);
-});
-
 test('bad lines are dropped and odd quantities become 1', () => {
   const r = normalizeReceipt({
     items: [
@@ -203,4 +198,128 @@ test('GEMINI_MODEL can be one name or a comma-separated list; otherwise the defa
   assert.deepEqual(modelsFromEnv({ GEMINI_MODEL: ' a , b ,, c ' }), ['a', 'b', 'c']);
   assert.deepEqual(modelsFromEnv({}), DEFAULT_MODELS);
   assert.ok(!DEFAULT_MODELS.includes('gemini-2.5-flash'), 'that model is being retired');
+});
+
+/* ----------------------------------------------- discounts and included charges */
+
+// The real receipt that exposed both problems: wantons $6.80, app payment
+// discount -$0.68, "GST $0.51 included", total $6.12.
+const wantons = {
+  isReceipt: true,
+  merchant: null,
+  items: [{ name: 'Wantons', quantity: 1, lineTotal: 6.8 }],
+  discounts: [{ name: 'App payment discount', amount: 0.68, appliesTo: null }],
+  serviceCharge: null,
+  gst: 0.51,
+  gstIncluded: true,
+  serviceChargeIncluded: false,
+  total: 6.12,
+};
+
+test('real receipt: the discount comes off the item and included GST is not added again', () => {
+  const r = normalizeReceipt(wantons);
+  assert.deepEqual(r.items, [{ name: 'Wantons', qty: 1, totalCents: 612 }]);
+  assert.deepEqual(r.discounts, [{ name: 'App payment discount', cents: 68 }]);
+  assert.equal(r.gstCents, 0);
+  assert.equal(r.gstIncludedCents, 51);
+  assert.equal(r.totalCents, 612);
+});
+
+test('the arithmetic catches included GST even when the AI forgets to say so', () => {
+  const r = normalizeReceipt({ ...wantons, gstIncluded: false });
+  assert.equal(r.gstCents, 0);
+  assert.equal(r.gstIncludedCents, 51);
+});
+
+test('GST added on top stays added, even if the AI wrongly says it is included', () => {
+  // 10.00 + 1.00 + 0.99 = 11.99 matches the printed total, so nothing is "included"
+  const r = normalizeReceipt({ items: [{ name: 'A', quantity: 1, lineTotal: 10 }], serviceCharge: 1, gst: 0.99, gstIncluded: true, total: 11.99 });
+  assert.equal(r.gstCents, 99);
+  assert.equal(r.gstIncludedCents, 0);
+  assert.equal(r.serviceChargeCents, 100);
+});
+
+test('when both charges are already in the prices, neither is added', () => {
+  const r = normalizeReceipt({ items: [{ name: 'Set', quantity: 1, lineTotal: 10 }], serviceCharge: 1, gst: 0.82, total: 10 });
+  assert.equal(r.serviceChargeCents, 0);
+  assert.equal(r.gstCents, 0);
+  assert.equal(r.serviceChargeIncludedCents, 100);
+  assert.equal(r.gstIncludedCents, 82);
+});
+
+test('an included service charge is detected the same way', () => {
+  const r = normalizeReceipt({ items: [{ name: 'Set', quantity: 1, lineTotal: 10 }], serviceCharge: 1, gst: 0.99, serviceChargeIncluded: true, total: 10.99 });
+  assert.equal(r.serviceChargeCents, 0);
+  assert.equal(r.serviceChargeIncludedCents, 100);
+  assert.equal(r.gstCents, 99);
+});
+
+test('a bill-wide discount is spread across items to the exact cent', () => {
+  const r = normalizeReceipt({
+    items: [{ name: 'A', quantity: 1, lineTotal: 10 }, { name: 'B', quantity: 1, lineTotal: 10 }, { name: 'C', quantity: 1, lineTotal: 10 }],
+    discounts: [{ name: 'Promo', amount: 1, appliesTo: null }],
+    total: 29,
+  });
+  assert.equal(r.items.reduce((s, i) => s + i.totalCents, 0), 2900);
+  // $1.00 over three equal items: the odd cent comes off the first item
+  assert.deepEqual(r.items.map((i) => i.totalCents), [966, 967, 967]);
+});
+
+test('a discount that names an item comes off only that item', () => {
+  const r = normalizeReceipt({
+    items: [{ name: 'Wagyu Burger', quantity: 1, lineTotal: 15 }, { name: 'Fries', quantity: 1, lineTotal: 5 }],
+    discounts: [{ name: '$2 off', amount: 2, appliesTo: 'wagyu burger' }],
+    total: 18,
+  });
+  assert.deepEqual(r.items.map((i) => [i.name, i.totalCents]), [['Wagyu Burger', 1300], ['Fries', 500]]);
+});
+
+test('a discount naming an item that is not there is spread instead of lost', () => {
+  const r = normalizeReceipt({
+    items: [{ name: 'Burger', quantity: 1, lineTotal: 15 }, { name: 'Fries', quantity: 1, lineTotal: 5 }],
+    discounts: [{ name: 'Promo', amount: 2, appliesTo: 'Sushi' }],
+    total: 18,
+  });
+  // $2.00 spread in proportion to price: $1.50 off the $15 item, $0.50 off the $5 item
+  assert.deepEqual(r.items.map((i) => i.totalCents), [1350, 450]);
+});
+
+test('a discount listed as a negative item is still handled as a discount', () => {
+  const r = normalizeReceipt({ items: [{ name: 'Burger', quantity: 1, lineTotal: 10 }, { name: 'Voucher', quantity: 1, lineTotal: -2 }], total: 8 });
+  assert.deepEqual(r.items, [{ name: 'Burger', qty: 1, totalCents: 800 }]);
+  assert.deepEqual(r.discounts, [{ name: 'Voucher', cents: 200 }]);
+});
+
+test('an item discounted to nothing is dropped', () => {
+  const r = normalizeReceipt({
+    items: [{ name: 'Coffee', quantity: 1, lineTotal: 5 }, { name: 'Free cake', quantity: 1, lineTotal: 6 }],
+    discounts: [{ name: '1-for-1', amount: 6, appliesTo: 'Free cake' }],
+    total: 5,
+  });
+  assert.deepEqual(r.items.map((i) => i.name), ['Coffee']);
+});
+
+test('a discount can never push a price below zero; a bill discounted to nothing is refused', () => {
+  const partly = normalizeReceipt({
+    items: [{ name: 'A', quantity: 1, lineTotal: 5 }, { name: 'B', quantity: 1, lineTotal: 5 }],
+    discounts: [{ name: 'Big', amount: 9, appliesTo: null }],
+    total: 1,
+  });
+  assert.ok(partly.items.every((i) => i.totalCents > 0));
+  assert.equal(partly.items.reduce((s, i) => s + i.totalCents, 0), 100);
+
+  // More than the whole bill means something was misread: better to say so than save an empty bill.
+  assert.throws(
+    () => normalizeReceipt({ items: [{ name: 'A', quantity: 1, lineTotal: 5 }], discounts: [{ name: 'Mega', amount: 50, appliesTo: null }], total: 5 }),
+    { code: 'UNREADABLE' },
+  );
+});
+
+test('the reader asks the AI for discounts and included charges separately', async () => {
+  const { fetchImpl, seen } = fakeGemini(ok(wantons));
+  const r = await readReceipt({ bytes: Buffer.from('x'), mimeType: 'image/jpeg', apiKey: 'K', models: ['m'], fetchImpl });
+  assert.equal(r.totalCents, 612);
+  const prompt = JSON.parse(seen[0].init.body).contents[0].parts[0].text;
+  assert.ok(prompt.includes('"discounts"'));
+  assert.ok(prompt.includes('gstIncluded'));
 });

@@ -72,3 +72,32 @@ test('the flow templates exist and stay short', () => {
     assert.ok(text.length > 0 && text.length < 200);
   }
 });
+
+test('a discount and an included GST are explained, and do not trigger the mismatch warning', () => {
+  // Real case: wantons $6.80, app discount -$0.68, "GST $0.51 included", total $6.12
+  const text = m.receiptReview({
+    merchant: null,
+    items: [{ name: 'Wantons', qty: 1, totalCents: 612 }],
+    discounts: [{ name: 'App payment discount', cents: 68 }],
+    serviceChargeCents: 0,
+    gstCents: 0,
+    serviceChargeIncludedCents: 0,
+    gstIncludedCents: 51,
+    totalCents: 612,
+  });
+  assert.ok(text.includes('Wantons — $6.12'));
+  assert.ok(text.includes('App payment discount — -$0.68 (already taken off the items above)'));
+  assert.ok(text.includes('GST — $0.51 (already in the prices)'));
+  assert.ok(text.includes('<b>Total — $6.12</b>'));
+  assert.ok(!text.includes('⚠️'));
+});
+
+test('an included service charge is explained the same way', () => {
+  const text = m.receiptReview({
+    items: [{ name: 'Set lunch', qty: 1, totalCents: 1000 }],
+    serviceChargeIncludedCents: 100,
+    totalCents: 1000,
+  });
+  assert.ok(text.includes('Service charge — $1.00 (already in the prices)'));
+  assert.ok(!text.includes('⚠️'));
+});

@@ -322,3 +322,34 @@ test('a receipt with a discount and an awkward quantity still settles exactly', 
   assert.equal(settlement.billResults[0].reconciled, true);
   assert.equal(settlement.balances.reduce((s, b) => s + b.netCents, 0), 0);
 });
+
+test('real receipt end to end: the review has no warning and the saved bill matches the printed total', async () => {
+  reader = async () => ({
+    merchant: null,
+    items: [{ name: 'Wantons', qty: 1, totalCents: 612 }],
+    discounts: [{ name: 'App payment discount', cents: 68 }],
+    serviceChargeCents: 0,
+    gstCents: 0,
+    serviceChargeIncludedCents: 0,
+    gstIncludedCents: 51,
+    totalCents: 612,
+  });
+  await bot.handleUpdate(photo());
+  const review = tg.last('edit').args[2];
+  assert.ok(!review.includes('⚠️'));
+  assert.ok(review.includes('already in the prices'));
+
+  await bot.handleUpdate(press(`ok:${store.getChatState(CHAT).pending.id}`));
+  const sessionId = store.getChatState(CHAT).sessionId;
+  const bill = store.getSession(sessionId).bills[0];
+  assert.deepEqual(bill.items.map((i) => i.totalCents), [612]);
+  assert.equal(bill.gstCents, 0);
+  assert.equal(bill.totalCents, 612);
+
+  const friend = store.addParticipant(sessionId, { name: 'Friend' });
+  const host = store.getSession(sessionId).participants[0];
+  store.setItemAllocation(sessionId, bill.items[0].id, [{ participantId: host.id }, { participantId: friend.id }]);
+  const settlement = computeSessionSettlement(store.getSession(sessionId));
+  assert.equal(settlement.ok, true);
+  assert.deepEqual(settlement.transfers, [{ from: friend.id, to: host.id, amountCents: 306 }]);
+});
