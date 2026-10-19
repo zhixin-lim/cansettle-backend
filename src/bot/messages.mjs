@@ -26,6 +26,7 @@ export const buttons = {
   anotherYes: 'Yes, another receipt',
   anotherNo: "That's all",
   openApp: 'Open CanSettle',
+  manual: 'Add a bill by hand ✍️',
 };
 
 export function welcome() {
@@ -38,6 +39,7 @@ export function welcome() {
     "Heads up: Google's Gemini AI reads your photo. /help explains what that means.",
     '',
     'Send the receipt photo whenever you are ready 📸',
+    'No receipt, or the photo is giving trouble? Tap the button below (or send /manual) and add the bill by hand.',
   ].join('\n');
 }
 
@@ -56,6 +58,7 @@ export function help() {
     'Nothing is permanent: a settlement is cleared after 24 hours. No accounts.',
     '',
     '/start — start a new settlement',
+    '/manual — add a bill by hand, no photo needed',
     '/cancel — drop the current one',
   ].join('\n');
 }
@@ -73,6 +76,7 @@ export function receiptReview(receipt, { number = 1 } = {}) {
   const sc = receipt.serviceChargeCents ?? 0;
   const gst = receipt.gstCents ?? 0;
   const itemsTotal = items.reduce((s, i) => s + i.totalCents, 0);
+  const discount = receipt.discountCents ?? 0;
 
   const lines = [`<b>Receipt ${number}${receipt.merchant ? ` — ${esc(receipt.merchant)}` : ''}</b>`, ''];
 
@@ -86,7 +90,7 @@ export function receiptReview(receipt, { number = 1 } = {}) {
   // Discounts are already taken off the item prices above, so say so: otherwise
   // a price lower than the receipt's looks like a misread.
   for (const d of receipt.discounts ?? []) {
-    lines.push(`${esc(d.name)} — -${formatCents(d.cents)} (already taken off the items above)`);
+    lines.push(`${esc(d.name)} — -${formatCents(d.cents)} (${d.onItem ? 'already taken off the item' : 'taken off the total'})`);
   }
   if (sc > 0) lines.push(`Service charge — ${formatCents(sc)}`);
   else if ((receipt.serviceChargeIncludedCents ?? 0) > 0) {
@@ -98,11 +102,12 @@ export function receiptReview(receipt, { number = 1 } = {}) {
   }
   lines.push(`<b>Total — ${formatCents(receipt.totalCents)}</b>`);
 
-  const gap = receipt.totalCents - (itemsTotal + sc + gst);
+  const expected = itemsTotal - discount + sc + gst;
+  const gap = receipt.totalCents - expected;
   if (gap !== 0) {
     lines.push(
       '',
-      `⚠️ Alamak, the items and charges add up to ${formatCents(itemsTotal + sc + gst)}, not ${formatCents(receipt.totalCents)}. I may have misread something. You can fix it in the app.`,
+      `⚠️ Alamak, the items and charges add up to ${formatCents(expected)}, not ${formatCents(receipt.totalCents)}. I may have misread something. You can fix it in the app.`,
     );
   }
 
@@ -133,6 +138,13 @@ export function askForPhoto() {
 
 export function nextReceipt() {
   return 'Send the next receipt 📸';
+}
+
+export function manualReady() {
+  return [
+    '<b>No receipt? No problem ✍️</b>',
+    'Tap below to open CanSettle and add the bill by hand: the items, who paid, and any service charge, GST or discount.',
+  ].join('\n');
 }
 
 export function cancelled() {

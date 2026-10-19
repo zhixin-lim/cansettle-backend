@@ -220,3 +220,82 @@ test('computeTransfers: ties are broken by creation order via stable sort', () =
     { from: 'b', to: 'c', amountCents: $(20) },
   ]);
 });
+
+// --- Discounts: shared out like service charge and GST ---
+test('Discount: two drinks at $4.90, member discount brings the bill to $8.43', () => {
+  const bill = {
+    id: 'chagee',
+    payerId: 'a',
+    participantIds: ['a', 'b'],
+    items: [
+      { id: 'd1', totalCents: $(4.9), allocations: [{ participantId: 'a' }] },
+      { id: 'd2', totalCents: $(4.9), allocations: [{ participantId: 'b' }] },
+    ],
+    discountCents: $(1.37),
+    serviceChargeCents: 0,
+    gstCents: 0,
+    totalCents: $(8.43),
+  };
+  const result = calculateBill(bill);
+  assert.equal(result.reconciled, true);
+  const [a, b] = result.shares;
+  // $1.37 cannot split evenly: the odd cent follows the same rule as everything else
+  assert.equal(a.discountCents + b.discountCents, 137);
+  assert.deepEqual([a.totalCents, b.totalCents], [422, 421]);
+  assert.equal(a.totalCents + b.totalCents, 843);
+});
+
+test('Discount is shared in proportion to what each person had', () => {
+  const bill = {
+    id: 'prop',
+    payerId: 'a',
+    participantIds: ['a', 'b'],
+    items: [
+      { id: 'x', totalCents: $(30), allocations: [{ participantId: 'a' }] },
+      { id: 'y', totalCents: $(10), allocations: [{ participantId: 'b' }] },
+    ],
+    discountCents: $(4),
+    serviceChargeCents: $(4),
+    gstCents: $(3.24),
+    totalCents: $(43.24), // 40 - 4 + 4 + 3.24
+  };
+  const result = calculateBill(bill);
+  assert.equal(result.reconciled, true);
+  const [a, b] = result.shares;
+  assert.equal(a.discountCents, 300); // 3/4 of the discount
+  assert.equal(b.discountCents, 100);
+  assert.equal(a.totalCents + b.totalCents, $(43.24));
+});
+
+test('Discount: per-item shares are reported before the discount, for the breakdown', () => {
+  const bill = {
+    id: 'shares',
+    payerId: 'a',
+    participantIds: ['a', 'b'],
+    items: [{ id: 'cake', totalCents: $(12), allocations: [{ participantId: 'a' }, { participantId: 'b' }] }],
+    discountCents: $(2),
+    serviceChargeCents: 0,
+    gstCents: 0,
+    totalCents: $(10),
+  };
+  const result = calculateBill(bill);
+  assert.deepEqual(result.itemShares, [
+    { itemId: 'cake', participantId: 'a', cents: 600 },
+    { itemId: 'cake', participantId: 'b', cents: 600 },
+  ]);
+  assert.equal(result.discountCents, 200);
+});
+
+test('Discount: a discount larger than everything bought is refused, not settled', () => {
+  const bill = {
+    id: 'silly',
+    payerId: 'a',
+    participantIds: ['a'],
+    items: [{ id: 'x', totalCents: $(5), allocations: [{ participantId: 'a' }] }],
+    discountCents: $(9),
+    serviceChargeCents: 0,
+    gstCents: 0,
+    totalCents: $(-4),
+  };
+  assert.equal(calculateBill(bill).reconciled, false);
+});

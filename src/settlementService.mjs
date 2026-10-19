@@ -30,6 +30,7 @@ export function computeSessionSettlement(session) {
       totalCents: item.totalCents,
       allocations: item.allocations,
     })),
+    discountCents: bill.discountCents ?? 0,
     serviceChargeCents: bill.serviceChargeCents,
     gstCents: bill.gstCents,
     totalCents: bill.totalCents,

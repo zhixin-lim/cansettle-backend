@@ -25,6 +25,7 @@ create table bills (
   name                   text,                                   -- optional, e.g. the shop name "Otter & Pebbles"
   source                 text not null check (source in ('receipt', 'manual')),
   payer_id               uuid not null references participants(id),
+  discount_cents         integer not null default 0,             -- money taken off the bill (member/voucher/app discount)
   service_charge_cents   integer not null default 0,
   gst_cents              integer not null default 0,
   total_cents            integer not null,

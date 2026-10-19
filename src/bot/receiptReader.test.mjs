@@ -216,10 +216,11 @@ const wantons = {
   total: 6.12,
 };
 
-test('real receipt: the discount comes off the item and included GST is not added again', () => {
+test('real receipt: the discount is kept as a bill discount and included GST is not added again', () => {
   const r = normalizeReceipt(wantons);
-  assert.deepEqual(r.items, [{ name: 'Wantons', qty: 1, totalCents: 612 }]);
-  assert.deepEqual(r.discounts, [{ name: 'App payment discount', cents: 68 }]);
+  assert.deepEqual(r.items, [{ name: 'Wantons', qty: 1, totalCents: 680 }]); // as printed
+  assert.equal(r.discountCents, 68);
+  assert.deepEqual(r.discounts, [{ name: 'App payment discount', cents: 68, onItem: false }]);
   assert.equal(r.gstCents, 0);
   assert.equal(r.gstIncludedCents, 51);
   assert.equal(r.totalCents, 612);
@@ -254,15 +255,15 @@ test('an included service charge is detected the same way', () => {
   assert.equal(r.gstCents, 99);
 });
 
-test('a bill-wide discount is spread across items to the exact cent', () => {
+test('a bill-wide discount leaves the item prices as printed', () => {
   const r = normalizeReceipt({
     items: [{ name: 'A', quantity: 1, lineTotal: 10 }, { name: 'B', quantity: 1, lineTotal: 10 }, { name: 'C', quantity: 1, lineTotal: 10 }],
     discounts: [{ name: 'Promo', amount: 1, appliesTo: null }],
     total: 29,
   });
-  assert.equal(r.items.reduce((s, i) => s + i.totalCents, 0), 2900);
-  // $1.00 over three equal items: the odd cent comes off the first item
-  assert.deepEqual(r.items.map((i) => i.totalCents), [966, 967, 967]);
+  assert.deepEqual(r.items.map((i) => i.totalCents), [1000, 1000, 1000]);
+  assert.equal(r.discountCents, 100);
+  assert.equal(r.totalCents, 2900);
 });
 
 test('a discount that names an item comes off only that item', () => {
@@ -272,22 +273,25 @@ test('a discount that names an item comes off only that item', () => {
     total: 18,
   });
   assert.deepEqual(r.items.map((i) => [i.name, i.totalCents]), [['Wagyu Burger', 1300], ['Fries', 500]]);
+  assert.equal(r.discountCents, 0);
+  assert.deepEqual(r.discounts, [{ name: '$2 off', cents: 200, onItem: true }]);
 });
 
-test('a discount naming an item that is not there is spread instead of lost', () => {
+test('a discount naming an item that is not there becomes a bill discount instead of being lost', () => {
   const r = normalizeReceipt({
     items: [{ name: 'Burger', quantity: 1, lineTotal: 15 }, { name: 'Fries', quantity: 1, lineTotal: 5 }],
     discounts: [{ name: 'Promo', amount: 2, appliesTo: 'Sushi' }],
     total: 18,
   });
-  // $2.00 spread in proportion to price: $1.50 off the $15 item, $0.50 off the $5 item
-  assert.deepEqual(r.items.map((i) => i.totalCents), [1350, 450]);
+  assert.deepEqual(r.items.map((i) => i.totalCents), [1500, 500]);
+  assert.equal(r.discountCents, 200);
 });
 
 test('a discount listed as a negative item is still handled as a discount', () => {
   const r = normalizeReceipt({ items: [{ name: 'Burger', quantity: 1, lineTotal: 10 }, { name: 'Voucher', quantity: 1, lineTotal: -2 }], total: 8 });
-  assert.deepEqual(r.items, [{ name: 'Burger', qty: 1, totalCents: 800 }]);
-  assert.deepEqual(r.discounts, [{ name: 'Voucher', cents: 200 }]);
+  assert.deepEqual(r.items, [{ name: 'Burger', qty: 1, totalCents: 1000 }]);
+  assert.equal(r.discountCents, 200);
+  assert.deepEqual(r.discounts, [{ name: 'Voucher', cents: 200, onItem: false }]);
 });
 
 test('an item discounted to nothing is dropped', () => {
@@ -299,20 +303,14 @@ test('an item discounted to nothing is dropped', () => {
   assert.deepEqual(r.items.map((i) => i.name), ['Coffee']);
 });
 
-test('a discount can never push a price below zero; a bill discounted to nothing is refused', () => {
-  const partly = normalizeReceipt({
-    items: [{ name: 'A', quantity: 1, lineTotal: 5 }, { name: 'B', quantity: 1, lineTotal: 5 }],
-    discounts: [{ name: 'Big', amount: 9, appliesTo: null }],
-    total: 1,
+test('a discount larger than everything bought is capped, so the mismatch shows up for review', () => {
+  const r = normalizeReceipt({
+    items: [{ name: 'A', quantity: 1, lineTotal: 5 }],
+    discounts: [{ name: 'Mega', amount: 50, appliesTo: null }],
+    total: 5,
   });
-  assert.ok(partly.items.every((i) => i.totalCents > 0));
-  assert.equal(partly.items.reduce((s, i) => s + i.totalCents, 0), 100);
-
-  // More than the whole bill means something was misread: better to say so than save an empty bill.
-  assert.throws(
-    () => normalizeReceipt({ items: [{ name: 'A', quantity: 1, lineTotal: 5 }], discounts: [{ name: 'Mega', amount: 50, appliesTo: null }], total: 5 }),
-    { code: 'UNREADABLE' },
-  );
+  assert.equal(r.discountCents, 500);
+  assert.ok(r.items.every((i) => i.totalCents > 0));
 });
 
 test('the reader asks the AI for discounts and included charges separately', async () => {

@@ -88,7 +88,7 @@ export function deleteParticipant(sessionId, participantId) {
   }
 }
 
-export function addBill(sessionId, { name = null, source, payerId, serviceChargeCents = 0, gstCents = 0, totalCents, items }) {
+export function addBill(sessionId, { name = null, source, payerId, discountCents = 0, serviceChargeCents = 0, gstCents = 0, totalCents, items }) {
   const session = requireSession(sessionId);
   const billId = randomUUID();
   const bill = {
@@ -97,6 +97,7 @@ export function addBill(sessionId, { name = null, source, payerId, serviceCharge
     name,
     source,
     payerId,
+    discountCents,
     serviceChargeCents,
     gstCents,
     totalCents,

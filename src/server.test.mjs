@@ -270,3 +270,36 @@ test('a bill name round-trips through the session', async () => {
   const after = (await get(`/sessions/${session.id}`)).body;
   assert.equal(after.bills[0].name, 'Otter & Pebbles');
 });
+
+test('a bill discount is stored, shared out, and reconciles to the printed total', async () => {
+  const session = (await post('/sessions', {})).body;
+  const a = (await post(`/sessions/${session.id}/participants`, { name: 'A' })).body;
+  const b = (await post(`/sessions/${session.id}/participants`, { name: 'B' })).body;
+  const bill = (
+    await post(`/sessions/${session.id}/bills`, {
+      source: 'manual',
+      payerId: a.id,
+      discountCents: 137,
+      totalCents: 843,
+      items: [{ name: 'Drink 1', totalCents: 490 }, { name: 'Drink 2', totalCents: 490 }],
+    })
+  ).body;
+  assert.equal(bill.discountCents, 137);
+  await patch(`/sessions/${session.id}/items/${bill.items[0].id}/allocation`, { allocations: [{ participantId: a.id }] });
+  await patch(`/sessions/${session.id}/items/${bill.items[1].id}/allocation`, { allocations: [{ participantId: b.id }] });
+
+  const settled = (await get(`/sessions/${session.id}/settlement`)).body;
+  assert.equal(settled.ok, true);
+  assert.equal(settled.billResults[0].discountCents, 137);
+  assert.equal(settled.billResults[0].shares.reduce((s, x) => s + x.totalCents, 0), 843);
+  assert.equal((await get(`/sessions/${session.id}`)).body.bills[0].discountCents, 137);
+});
+
+test('a negative or fractional discount is rejected', async () => {
+  const session = (await post('/sessions', {})).body;
+  const a = (await post(`/sessions/${session.id}/participants`, { name: 'A' })).body;
+  for (const discountCents of [-5, 1.5, '3']) {
+    const res = await post(`/sessions/${session.id}/bills`, { source: 'manual', payerId: a.id, discountCents, totalCents: 100, items: [{ name: 'X', totalCents: 100 }] });
+    assert.equal(res.status, 400);
+  }
+});

@@ -92,12 +92,16 @@ export function createApp(options = {}) {
 
   app.post('/sessions/:sessionId/bills', async (req, res, next) => {
     try {
-      const { name, source, payerId, serviceChargeCents, gstCents, totalCents, items } = req.body ?? {};
+      const { name, source, payerId, discountCents, serviceChargeCents, gstCents, totalCents, items } = req.body ?? {};
       if (!source || !payerId || totalCents == null || !Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: 'source, payerId, totalCents and at least one item are required' });
       }
+      if (discountCents !== undefined && (!Number.isInteger(discountCents) || discountCents < 0)) {
+        return res.status(400).json({ error: 'discountCents must be a whole number of cents, zero or more' });
+      }
       const bill = await store.addBill(req.params.sessionId, {
         name: name ?? null,
+        discountCents: discountCents ?? 0,
         source,
         payerId,
         serviceChargeCents: serviceChargeCents ?? 0,

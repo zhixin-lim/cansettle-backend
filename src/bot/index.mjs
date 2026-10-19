@@ -2,6 +2,9 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { createTelegram } from './telegram.mjs';
 import { readReceipt } from './receiptReader.mjs';
 import { createBotHandler } from './handler.mjs';
+import { validateInitData } from './telegramAuth.mjs';
+import { groupMessageHtml, personalMessageHtml } from './shareMessages.mjs';
+import { computeSessionSettlement } from '../settlementService.mjs';
 
 /**
  * Telegram sends this secret in a header with every webhook call, so nobody
@@ -10,6 +13,21 @@ import { createBotHandler } from './handler.mjs';
  */
 export function webhookSecret(token) {
   return createHash('sha256').update(`cansettle:${token}`).digest('hex');
+}
+
+/**
+ * PayNow numbers arrive with each share request only so they can be written
+ * into the message. They are never stored or logged. Anything that doesn't look
+ * like a phone number, or isn't about someone in this settlement, is dropped.
+ */
+function cleanPaynow(paynow, session) {
+  const out = {};
+  if (!paynow || typeof paynow !== 'object') return out;
+  for (const participant of session.participants) {
+    const value = paynow[participant.id];
+    if (typeof value === 'string' && /^\+?[\d ]{4,20}$/.test(value.trim())) out[participant.id] = value.trim();
+  }
+  return out;
 }
 
 /**
@@ -42,6 +60,59 @@ export function mountBot(app, { store, env = process.env, tg, reader = readRecei
     // the handler finishes in the background and never throws.
     res.sendStatus(200);
     bot.handleUpdate(req.body);
+  });
+
+  /**
+   * Prepares a formatted message for the person using the Mini App, to send to a chat
+   * of their choice. They must prove who they are with Telegram's signed initData.
+   * Body: { initData, kind: 'group' | 'person', participantId?, paynow?: { [participantId]: number } }
+   */
+  app.post('/sessions/:sessionId/telegram-share', async (req, res, next) => {
+    try {
+      const { initData, kind, participantId, paynow } = req.body ?? {};
+      const auth = validateInitData(initData, token);
+      if (!auth) {
+        return res.status(401).json({ error: 'Telegram could not confirm who you are. Open the app from Telegram and try again.' });
+      }
+      if (kind !== 'group' && kind !== 'person') {
+        return res.status(400).json({ error: "kind must be 'group' or 'person'" });
+      }
+
+      const session = await store.getSession(req.params.sessionId);
+      if (!session) return res.status(404).json({ error: 'Session not found' });
+      const settlement = computeSessionSettlement(session);
+      if (!settlement.ok) {
+        return res.status(409).json({ error: 'Finish assigning every item before sharing.', reason: settlement.reason });
+      }
+
+      const numbers = cleanPaynow(paynow, session);
+      let html;
+      let title;
+      if (kind === 'group') {
+        html = groupMessageHtml(session, settlement, { paynow: numbers });
+        title = 'Settlement summary';
+      } else {
+        const person = session.participants.find((p) => p.id === participantId);
+        if (!person) return res.status(400).json({ error: 'Unknown participant' });
+        html = personalMessageHtml(session, settlement, person.id, { paynow: numbers });
+        if (!html) return res.status(409).json({ error: `${person.name} has nothing to pay.` });
+        title = `Message for ${person.name}`;
+      }
+
+      let prepared;
+      try {
+        prepared = await telegram.savePreparedInlineMessage({
+          userId: auth.user.id,
+          result: { type: 'article', id: 'share', title, input_message_content: { message_text: html, parse_mode: 'HTML' } },
+        });
+      } catch (err) {
+        console.error(`Preparing a Telegram message failed: ${err.message}`);
+        return res.status(502).json({ error: 'Telegram could not prepare the message. You can still copy it instead.' });
+      }
+      res.json({ preparedMessageId: prepared.id });
+    } catch (err) {
+      next(err);
+    }
   });
 
   /** Tells Telegram where to send updates. Run once at startup. */

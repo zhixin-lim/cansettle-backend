@@ -5,8 +5,6 @@
 // Nothing here works out who owes what, and nothing is trusted blindly: the
 // person confirms what was read before it goes any further.
 
-import { allocateProportional } from '../engine/allocation.mjs';
-
 export class ReceiptReadError extends Error {
   /** code: NOT_A_RECEIPT | UNREADABLE | BUSY | CONFIG */
   constructor(code, message) {
@@ -50,46 +48,46 @@ function sameItem(a, b) {
 }
 
 /**
- * Takes each discount off the items it belongs to, so the app only ever sees
- * ordinary positive prices. A discount that names an item comes off that item;
- * any other discount is spread across all the items in proportion to their
- * price (exact to the cent, using the same rounding rule as the settlement
- * engine). Items discounted down to nothing are dropped.
+ * Sorts discounts into the two kinds a bill can have:
+ *  - a discount that names an item ("$2 off Burger") comes off that item's price;
+ *  - everything else (a member discount, voucher or payment-app discount) is a
+ *    bill-wide discount, kept as one amount and shared out by the settlement
+ *    engine in proportion to what each person had. Items keep their printed prices.
+ * Items discounted down to nothing are dropped.
  */
-function foldDiscounts(items, discounts) {
+function applyDiscounts(items, discounts) {
   const applied = [];
+  let billWide = 0;
   for (const discount of discounts) {
-    const available = items.reduce((sum, i) => sum + i.totalCents, 0);
-    let remaining = Math.min(discount.cents, available);
-    if (remaining <= 0) continue;
-    applied.push({ name: discount.name, cents: remaining });
-
+    let remaining = discount.cents;
     const target = discount.appliesTo ? items.find((i) => i.totalCents > 0 && sameItem(i.name, discount.appliesTo)) : null;
     if (target) {
       const taken = Math.min(remaining, target.totalCents);
       target.totalCents -= taken;
       remaining -= taken;
+      if (taken > 0) applied.push({ name: discount.name, cents: taken, onItem: true });
     }
     if (remaining > 0) {
-      const live = items.filter((i) => i.totalCents > 0);
-      const shares = allocateProportional(remaining, live.map((i, index) => ({ id: index, weight: i.totalCents })));
-      live.forEach((item, index) => {
-        item.totalCents -= shares[index].amountCents;
-      });
+      billWide += remaining;
+      applied.push({ name: discount.name, cents: remaining, onItem: false });
     }
   }
-  return { items: items.filter((i) => i.totalCents > 0), applied };
+  const live = items.filter((i) => i.totalCents > 0);
+  const itemsTotal = live.reduce((sum, i) => sum + i.totalCents, 0);
+  // A discount can't be more than everything bought (anything else is a misread).
+  return { items: live, discountCents: Math.min(billWide, itemsTotal), applied };
 }
 
 /**
  * Validates and cleans what the AI returned, so everything downstream can rely
  * on it. Throws ReceiptReadError if it isn't a receipt or nothing usable was read.
  *
- * Returns { merchant, items, discounts, serviceChargeCents, gstCents,
+ * Returns { merchant, items, discountCents, discounts, serviceChargeCents, gstCents,
  *           serviceChargeIncludedCents, gstIncludedCents, totalCents } where
- *  - items all have positive prices, with discounts already taken off;
+ *  - items all have positive prices (an item-specific discount is already taken off it);
+ *  - discountCents is the bill-wide discount, and discounts lists every discount for display;
  *  - serviceChargeCents and gstCents are only charges ADDED on top of the items,
- *    so items + charges adds up to the total. A charge the receipt says is
+ *    so items - discount + charges adds up to the total. A charge the receipt says is
  *    "included" in the prices is reported separately (…IncludedCents) and not added.
  */
 export function normalizeReceipt(raw) {
@@ -120,16 +118,17 @@ export function normalizeReceipt(raw) {
   }
   if (items.length === 0) throw new ReceiptReadError('UNREADABLE');
 
-  const folded = foldDiscounts(items, discounts);
-  items = folded.items;
+  const sorted = applyDiscounts(items, discounts);
+  items = sorted.items;
   if (items.length === 0) throw new ReceiptReadError('UNREADABLE');
+  const discountCents = sorted.discountCents;
 
   let serviceChargeCents = Math.max(0, toCents(raw.serviceCharge) ?? 0);
   let gstCents = Math.max(0, toCents(raw.gst) ?? 0);
   let serviceChargeIncludedCents = 0;
   let gstIncludedCents = 0;
 
-  const base = items.reduce((s, i) => s + i.totalCents, 0);
+  const base = items.reduce((s, i) => s + i.totalCents, 0) - discountCents; // what is left to pay before any charges
   const printed = toCents(raw.total);
   const hasPrinted = printed !== null && printed > 0;
   const reconciles = () => hasPrinted && base + serviceChargeCents + gstCents === printed;
@@ -163,7 +162,8 @@ export function normalizeReceipt(raw) {
   return {
     merchant,
     items,
-    discounts: folded.applied,
+    discountCents,
+    discounts: sorted.applied,
     serviceChargeCents,
     gstCents,
     serviceChargeIncludedCents,

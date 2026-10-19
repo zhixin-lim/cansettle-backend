@@ -323,11 +323,12 @@ test('a receipt with a discount and an awkward quantity still settles exactly', 
   assert.equal(settlement.balances.reduce((s, b) => s + b.netCents, 0), 0);
 });
 
-test('real receipt end to end: the review has no warning and the saved bill matches the printed total', async () => {
+test('real receipt end to end: no warning, the discount is saved on the bill, and it settles exactly', async () => {
   reader = async () => ({
     merchant: null,
-    items: [{ name: 'Wantons', qty: 1, totalCents: 612 }],
-    discounts: [{ name: 'App payment discount', cents: 68 }],
+    items: [{ name: 'Wantons', qty: 1, totalCents: 680 }],
+    discountCents: 68,
+    discounts: [{ name: 'App payment discount', cents: 68, onItem: false }],
     serviceChargeCents: 0,
     gstCents: 0,
     serviceChargeIncludedCents: 0,
@@ -342,7 +343,8 @@ test('real receipt end to end: the review has no warning and the saved bill matc
   await bot.handleUpdate(press(`ok:${store.getChatState(CHAT).pending.id}`));
   const sessionId = store.getChatState(CHAT).sessionId;
   const bill = store.getSession(sessionId).bills[0];
-  assert.deepEqual(bill.items.map((i) => i.totalCents), [612]);
+  assert.deepEqual(bill.items.map((i) => i.totalCents), [680]);
+  assert.equal(bill.discountCents, 68);
   assert.equal(bill.gstCents, 0);
   assert.equal(bill.totalCents, 612);
 
@@ -352,4 +354,31 @@ test('real receipt end to end: the review has no warning and the saved bill matc
   const settlement = computeSessionSettlement(store.getSession(sessionId));
   assert.equal(settlement.ok, true);
   assert.deepEqual(settlement.transfers, [{ from: friend.id, to: host.id, amountCents: 306 }]);
+});
+
+test('/manual starts a settlement with no photo and opens the app on it', async () => {
+  await bot.handleUpdate(text('/manual'));
+  const sent = tg.last('send');
+  assert.ok(sent.args[1].includes('by hand'));
+  const url = sent.args[2].reply_markup.inline_keyboard[0][0].web_app.url;
+  const sessionId = new URL(url).searchParams.get('session');
+  assert.equal(url.startsWith('https://app.example/?session='), true);
+  const session = store.getSession(sessionId);
+  assert.deepEqual(session.participants.map((p) => p.name), ['Zhi Xin']);
+  assert.equal(session.bills.length, 0);
+  assert.equal(store.getChatState(CHAT), null);
+});
+
+test('the welcome message carries an "add by hand" button that does the same', async () => {
+  await bot.handleUpdate(text('/start'));
+  const button = tg.last('send').args[2].reply_markup.inline_keyboard[0][0];
+  assert.equal(button.callback_data, 'manual');
+  await bot.handleUpdate(press('manual'));
+  assert.ok(tg.last('send').args[2].reply_markup.inline_keyboard[0][0].web_app.url.includes('?session='));
+});
+
+test('/manual works even with a receipt waiting for review, and starts fresh', async () => {
+  await bot.handleUpdate(photo());
+  await bot.handleUpdate(text('/manual'));
+  assert.equal(store.getChatState(CHAT), null);
 });

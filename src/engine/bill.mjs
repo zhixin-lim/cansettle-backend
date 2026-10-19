@@ -25,6 +25,9 @@ import { allocateProportional } from './allocation.mjs';
  * @property {string} payerId
  * @property {string[]} participantIds - every participant relevant to this bill, in creation order
  * @property {BillItem[]} items
+ * @property {number} [discountCents] - money taken off the bill (a member discount, voucher or
+ *   payment-app discount), as a positive number. Shared out like service charge and GST: in
+ *   proportion to what each person had. Defaults to 0.
  * @property {number} serviceChargeCents - printed on the receipt, or 0/manual
  * @property {number} gstCents - printed on the receipt, or 0/manual
  * @property {number} totalCents - printed bill total, the source of truth to reconcile against
@@ -37,6 +40,7 @@ import { allocateProportional } from './allocation.mjs';
  */
 function computeItemSubtotals(items, participantIds) {
   const subtotals = new Map(participantIds.map((id) => [id, 0]));
+  const itemShares = []; // who owes how much of each item, before any discount
 
   for (const item of items) {
     if (!item.allocations || item.allocations.length === 0) {
@@ -46,10 +50,11 @@ function computeItemSubtotals(items, participantIds) {
     const shares = allocateProportional(item.totalCents, weights);
     for (const s of shares) {
       subtotals.set(s.id, (subtotals.get(s.id) ?? 0) + s.amountCents);
+      itemShares.push({ itemId: item.id, participantId: s.id, cents: s.amountCents });
     }
   }
 
-  return subtotals;
+  return { subtotals, itemShares };
 }
 
 /**
@@ -59,7 +64,9 @@ function computeItemSubtotals(items, participantIds) {
  * @param {Bill} bill
  * @returns {{
  *   billId: string,
- *   shares: {participantId: string, itemCents: number, serviceChargeCents: number, gstCents: number, totalCents: number}[],
+ *   shares: {participantId: string, itemCents: number, discountCents: number, serviceChargeCents: number, gstCents: number, totalCents: number}[],
+ *   itemShares: {itemId: string, participantId: string, cents: number}[],
+ *   discountCents: number,
  *   itemSubtotalCents: number,
  *   reconciledTotalCents: number,
  *   expectedTotalCents: number,
@@ -67,37 +74,45 @@ function computeItemSubtotals(items, participantIds) {
  * }}
  */
 export function calculateBill(bill) {
-  const subtotalMap = computeItemSubtotals(bill.items, bill.participantIds);
+  const { subtotals: subtotalMap, itemShares } = computeItemSubtotals(bill.items, bill.participantIds);
+  const discountCents = bill.discountCents ?? 0;
   const itemSubtotalCents = [...subtotalMap.values()].reduce((a, b) => a + b, 0);
 
-  // Weight for SC/GST allocation = each participant's pre-tax item subtotal.
+  // Weight for discount/SC/GST allocation = each participant's item subtotal (before the discount).
   const weights = bill.participantIds.map((id) => ({ id, weight: subtotalMap.get(id) ?? 0 }));
 
+  const discountAllocations = allocateProportional(discountCents, weights);
   const scAllocations = allocateProportional(bill.serviceChargeCents, weights);
   const gstAllocations = allocateProportional(bill.gstCents, weights);
 
+  const discountMap = new Map(discountAllocations.map((a) => [a.id, a.amountCents]));
   const scMap = new Map(scAllocations.map((a) => [a.id, a.amountCents]));
   const gstMap = new Map(gstAllocations.map((a) => [a.id, a.amountCents]));
 
   const shares = bill.participantIds.map((id) => {
     const itemCents = subtotalMap.get(id) ?? 0;
+    const personDiscountCents = discountMap.get(id) ?? 0;
     const serviceChargeCents = scMap.get(id) ?? 0;
     const gstCents = gstMap.get(id) ?? 0;
     return {
       participantId: id,
       itemCents,
+      discountCents: personDiscountCents,
       serviceChargeCents,
       gstCents,
-      totalCents: itemCents + serviceChargeCents + gstCents,
+      totalCents: itemCents - personDiscountCents + serviceChargeCents + gstCents,
     };
   });
 
   const reconciledTotalCents = shares.reduce((s, x) => s + x.totalCents, 0);
-  const reconciled = reconciledTotalCents === bill.totalCents;
+  // A discount bigger than everything bought makes no sense: treat it as a mistake, not a bill.
+  const reconciled = reconciledTotalCents === bill.totalCents && discountCents >= 0 && discountCents <= itemSubtotalCents;
 
   return {
     billId: bill.id,
     shares,
+    itemShares,
+    discountCents,
     itemSubtotalCents,
     reconciledTotalCents,
     expectedTotalCents: bill.totalCents,

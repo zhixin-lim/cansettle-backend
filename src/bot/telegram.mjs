@@ -45,6 +45,21 @@ export function createTelegram({ token, fetchImpl = fetch }) {
       return call('answerCallbackQuery', { callback_query_id: callbackQueryId });
     },
 
+    /**
+     * Saves a message the Mini App's user can then send to a chat of their choice
+     * (Mini App -> shareMessage). Returns { id, expiration_date }.
+     */
+    savePreparedInlineMessage({ userId, result }) {
+      return call('savePreparedInlineMessage', {
+        user_id: userId,
+        result,
+        allow_user_chats: true,
+        allow_group_chats: true,
+        allow_bot_chats: false,
+        allow_channel_chats: false,
+      });
+    },
+
     setWebhook({ url, secret }) {
       return call('setWebhook', {
         url,

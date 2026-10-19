@@ -88,6 +88,7 @@ export async function getSession(sessionId) {
       name: b.name,
       source: b.source,
       payerId: b.payer_id,
+      discountCents: b.discount_cents ?? 0,
       serviceChargeCents: b.service_charge_cents,
       gstCents: b.gst_cents,
       totalCents: b.total_cents,
@@ -175,7 +176,7 @@ export async function deleteParticipant(sessionId, participantId) {
   throwIfError(error, 'deleteParticipant');
 }
 
-export async function addBill(sessionId, { name = null, source, payerId, serviceChargeCents = 0, gstCents = 0, totalCents, items }) {
+export async function addBill(sessionId, { name = null, source, payerId, discountCents = 0, serviceChargeCents = 0, gstCents = 0, totalCents, items }) {
   const { data: bill, error: billError } = await supabase
     .from('bills')
     .insert({
@@ -183,6 +184,7 @@ export async function addBill(sessionId, { name = null, source, payerId, service
       name,
       source,
       payer_id: payerId,
+      discount_cents: discountCents,
       service_charge_cents: serviceChargeCents,
       gst_cents: gstCents,
       total_cents: totalCents,
@@ -207,6 +209,7 @@ export async function addBill(sessionId, { name = null, source, payerId, service
     name: bill.name,
     source: bill.source,
     payerId: bill.payer_id,
+    discountCents: bill.discount_cents ?? 0,
     serviceChargeCents: bill.service_charge_cents,
     gstCents: bill.gst_cents,
     totalCents: bill.total_cents,

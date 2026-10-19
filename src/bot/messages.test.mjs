@@ -77,19 +77,36 @@ test('a discount and an included GST are explained, and do not trigger the misma
   // Real case: wantons $6.80, app discount -$0.68, "GST $0.51 included", total $6.12
   const text = m.receiptReview({
     merchant: null,
-    items: [{ name: 'Wantons', qty: 1, totalCents: 612 }],
-    discounts: [{ name: 'App payment discount', cents: 68 }],
+    items: [{ name: 'Wantons', qty: 1, totalCents: 680 }],
+    discountCents: 68,
+    discounts: [{ name: 'App payment discount', cents: 68, onItem: false }],
     serviceChargeCents: 0,
     gstCents: 0,
     serviceChargeIncludedCents: 0,
     gstIncludedCents: 51,
     totalCents: 612,
   });
-  assert.ok(text.includes('Wantons — $6.12'));
-  assert.ok(text.includes('App payment discount — -$0.68 (already taken off the items above)'));
+  assert.ok(text.includes('Wantons — $6.80'));
+  assert.ok(text.includes('App payment discount — -$0.68 (taken off the total)'));
   assert.ok(text.includes('GST — $0.51 (already in the prices)'));
   assert.ok(text.includes('<b>Total — $6.12</b>'));
   assert.ok(!text.includes('⚠️'));
+});
+
+test('an item-specific discount is described as coming off the item', () => {
+  const text = m.receiptReview({
+    items: [{ name: 'Burger', qty: 1, totalCents: 1300 }],
+    discounts: [{ name: '$2 off', cents: 200, onItem: true }],
+    totalCents: 1300,
+  });
+  assert.ok(text.includes('$2 off — -$2.00 (already taken off the item)'));
+  assert.ok(!text.includes('⚠️'));
+});
+
+test('the mismatch warning accounts for a bill discount', () => {
+  const base = { items: [{ name: 'A', qty: 1, totalCents: 1000 }], discountCents: 100, discounts: [{ name: 'x', cents: 100, onItem: false }] };
+  assert.ok(!m.receiptReview({ ...base, totalCents: 900 }).includes('⚠️'));
+  assert.ok(m.receiptReview({ ...base, totalCents: 1000 }).includes('⚠️'));
 });
 
 test('an included service charge is explained the same way', () => {
@@ -100,4 +117,11 @@ test('an included service charge is explained the same way', () => {
   });
   assert.ok(text.includes('Service charge — $1.00 (already in the prices)'));
   assert.ok(!text.includes('⚠️'));
+});
+
+test('welcome and help point to manual entry', () => {
+  assert.ok(m.welcome().includes('/manual'));
+  assert.ok(m.help().includes('/manual'));
+  assert.ok(m.manualReady().includes('by hand'));
+  assert.ok(m.buttons.manual.length > 0);
 });

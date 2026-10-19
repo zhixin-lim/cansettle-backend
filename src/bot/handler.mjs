@@ -78,6 +78,24 @@ export function createBotHandler({
     await store.clearChatState(chatId);
   }
 
+  /* -------------------------------------------------------------- manual */
+
+  /**
+   * Starts a settlement with no photo: creates it with the sender as the first
+   * person, and opens the app on it. Nothing more for the bot to do afterwards.
+   */
+  async function startManual(chatId, from) {
+    await store.clearChatState(chatId);
+    const session = await store.createSession({});
+    const name = (from?.first_name ?? 'Me').toString().trim().slice(0, 40) || 'Me';
+    await store.addParticipant(session.id, { name });
+    return say(chatId, msg.manualReady(), {
+      reply_markup: {
+        inline_keyboard: [[{ text: msg.buttons.openApp, web_app: { url: `${appUrl}/?session=${session.id}` } }]],
+      },
+    });
+  }
+
   /* -------------------------------------------------------------- photos */
 
   async function handlePhoto(chatId, message) {
@@ -142,6 +160,7 @@ export function createBotHandler({
     const messageId = callback.message?.message_id;
     await tg.answerCallbackQuery(callback.id).catch(() => {});
     const [action, token] = String(callback.data ?? '').split(':');
+    if (action === 'manual') return startManual(chatId, callback.from);
     const state = await store.getChatState(chatId);
 
     const stale = async () => {
@@ -171,6 +190,7 @@ export function createBotHandler({
         name: receipt.merchant,
         source: 'receipt',
         payerId: state.hostId,
+        discountCents: receipt.discountCents ?? 0,
         serviceChargeCents: receipt.serviceChargeCents,
         gstCents: receipt.gstCents,
         totalCents: receipt.totalCents,
@@ -223,8 +243,11 @@ export function createBotHandler({
     const command = commandOf(message.text);
     if (command === 'start') {
       await startFresh(chatId);
-      return say(chatId, msg.welcome());
+      return say(chatId, msg.welcome(), {
+        reply_markup: { inline_keyboard: [[{ text: msg.buttons.manual, callback_data: 'manual' }]] },
+      });
     }
+    if (command === 'manual') return startManual(chatId, message.from);
     if (command === 'help') return say(chatId, msg.help());
     if (command === 'cancel') {
       const had = await store.getChatState(chatId);
